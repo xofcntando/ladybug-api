@@ -13,7 +13,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .brand{display:flex;align-items:center;gap:10px;color:#fff;text-decoration:none;font:700 22px var(--display);letter-spacing:-.01em}
 .key{display:flex;align-items:center;gap:8px;margin-left:auto}
 .key label{font-size:13px;color:#bdb8b2}
-.key input{width:230px;background:#241f1c;border:1px solid #433c37;border-radius:6px;padding:7px 10px;color:#fff;font-family:var(--mono);font-size:13px}
+.key input{-webkit-text-security:disc;width:230px;background:#241f1c;border:1px solid #433c37;border-radius:6px;padding:7px 10px;color:#fff;font-family:var(--mono);font-size:13px}
 .keystate{font-size:13px;min-width:90px}
 .keystate.ok{color:#6fe3a2}.keystate.bad{color:#ff8b97}
 .docs{color:#bdb8b2;font-size:14px;text-decoration:none}.docs:hover{color:#fff}

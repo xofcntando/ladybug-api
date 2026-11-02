@@ -16,9 +16,9 @@
     <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true"><circle cx="16" cy="18" r="13" fill="#D62839"/><path d="M16 5v26" stroke="#14110F" stroke-width="1.6"/><circle cx="16" cy="6.5" r="5" fill="#14110F"/><circle cx="10" cy="16" r="2.5" fill="#14110F"/><circle cx="22" cy="16" r="2.5" fill="#14110F"/><circle cx="11" cy="24" r="2.2" fill="#14110F"/><circle cx="21" cy="24" r="2.2" fill="#14110F"/></svg>
     <span>Ladybug</span>
   </a>
-  <form class="key" id="keyform" autocomplete="off">
+  <form class="key" id="keyform" autocomplete="off" action="javascript:void(0)">
     <label for="apikey">API key</label>
-    <input id="apikey" type="password" placeholder="Paste your key" spellcheck="false">
+    <input id="apikey" type="text" name="ladybug-key" autocomplete="off" autocapitalize="off" data-lpignore="true" data-1p-ignore placeholder="Paste your key" spellcheck="false">
     <button type="submit" class="ghost" id="keybtn">Save</button>
     <span id="keystate" class="keystate" role="status"></span>
   </form>
