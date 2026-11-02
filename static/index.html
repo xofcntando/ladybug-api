@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ladybug Console</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='17' r='13' fill='%23D62839'/><circle cx='16' cy='6' r='5' fill='%2314110F'/><circle cx='11' cy='16' r='2.4' fill='%2314110F'/><circle cx='21' cy='20' r='2.4' fill='%2314110F'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/" aria-label="Ladybug Console">
+    <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true"><circle cx="16" cy="18" r="13" fill="#D62839"/><path d="M16 5v26" stroke="#14110F" stroke-width="1.6"/><circle cx="16" cy="6.5" r="5" fill="#14110F"/><circle cx="10" cy="16" r="2.5" fill="#14110F"/><circle cx="22" cy="16" r="2.5" fill="#14110F"/><circle cx="11" cy="24" r="2.2" fill="#14110F"/><circle cx="21" cy="24" r="2.2" fill="#14110F"/></svg>
+    <span>Ladybug</span>
+  </a>
+  <form class="key" id="keyform" autocomplete="off">
+    <label for="apikey">API key</label>
+    <input id="apikey" type="password" placeholder="Paste your key" spellcheck="false">
+    <button type="submit" class="ghost" id="keybtn">Save</button>
+    <span id="keystate" class="keystate" role="status"></span>
+  </form>
+  <a class="docs" href="/docs" target="_blank" rel="noopener">API docs</a>
+</header>
+<div class="shell">
+  <nav id="nav" aria-label="Tools"></nav>
+  <main>
+    <div id="tool"></div>
+  </main>
+</div>
+<script src="/ui/app.js"></script>
+</body>
+</html>

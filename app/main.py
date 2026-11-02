@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from pydantic import BaseModel, Field
 
 from . import ai, config
@@ -28,9 +30,13 @@ app.include_router(utils_router, dependencies=auth)
 app.include_router(media_router, dependencies=auth)
 
 
-@app.get("/")
+STATIC = Path(__file__).resolve().parent.parent / "static"
+app.mount("/ui", StaticFiles(directory=STATIC), name="ui")
+
+
+@app.get("/", include_in_schema=False)
 def root():
-    return {"name": "Ladybug API", "docs": "/docs", "health": "/health"}
+    return FileResponse(STATIC / "index.html")
 
 
 @app.get("/health")

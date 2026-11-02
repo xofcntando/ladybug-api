@@ -2,6 +2,9 @@
 
 FastAPI service with file, download and AI endpoints. Auth: `X-API-Key` header on all `/v1` routes. Interactive docs at `/docs`.
 
+## Web console
+Open the service root (`/`) for a point-and-click UI for every tool. Paste your API key at the top; it is stored only in your browser.
+
 ## Endpoints
 All under `/v1` need `X-API-Key`. Full interactive list at `/docs`.
 

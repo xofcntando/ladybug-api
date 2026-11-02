@@ -3,17 +3,22 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 
-from fastapi import Header, HTTPException, Query
+from fastapi import HTTPException, Security
+from fastapi.security import APIKeyHeader, APIKeyQuery
 
 from . import config
 
 
-async def require_key(x_api_key: str = Header(default=""), apikey: str = Query(default="")):
-    """Every /v1 route needs a valid X-API-Key header."""
-    x_api_key = x_api_key or apikey
+_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+_query = APIKeyQuery(name="apikey", auto_error=False)
+
+
+async def require_key(h: str | None = Security(_header), q: str | None = Security(_query)):
+    """Every /v1 route needs a valid key: X-API-Key header or ?apikey= (shows as an Authorize button in /docs)."""
+    key = h or q or ""
     if not config.API_KEYS:
         raise HTTPException(503, "Server has no API_KEYS configured")
-    if not any(hmac.compare_digest(x_api_key, k) for k in config.API_KEYS):
+    if not any(hmac.compare_digest(key, k) for k in config.API_KEYS):
         raise HTTPException(401, "Invalid or missing API key (X-API-Key header or ?apikey=)")
 
 
