@@ -2,7 +2,9 @@ const $ = (s, r = document) => r.querySelector(s);
 const el = (t, a = {}, ...kids) => { const e = document.createElement(t); for (const [k, v] of Object.entries(a)) k === 'class' ? e.className = v : k === 'html' ? e.innerHTML = v : k.startsWith('on') ? e.addEventListener(k.slice(2), v) : e.setAttribute(k, v); kids.flat().forEach(c => e.append(c?.nodeType ? c : document.createTextNode(c ?? ''))); return e; };
 const getKey = () => localStorage.getItem('ladybug_key') || '';
 
+let CALLS = [];
 async function api(path, { method = 'GET', json, form, blob } = {}) {
+  CALLS.push({ method, path, json });
   const h = { 'X-API-Key': getKey() };
   let body;
   if (json) { h['Content-Type'] = 'application/json'; body = JSON.stringify(json); }
@@ -55,6 +57,7 @@ const R = {
       return el('div', { class: 'card media' }, m.thumbnail ? el('img', { src: m.thumbnail, alt: '', referrerpolicy: 'no-referrer' }) : el('div'),
         el('div', {}, el('h2', {}, m.title), el('div', { class: 'meta' }, [m.artist, mins(m.duration), m.source, m.license, m.commercial_use === false ? 'non-commercial' : ''].filter(Boolean).join('  ·  ')),
           m.preview_url && m.source !== 'archive' ? el('audio', { src: m.preview_url, controls: '', preload: 'none', style: 'width:100%;margin:8px 0' }) : '', slot,
+          el('div', { class: 'meta mono', style: 'word-break:break-all' }, 'API: ' + location.origin + '/v1/music/download?id=' + m.id),
           el('div', { class: 'meta' }, m.attribution)));
     };
     return el('div', {}, d.errors ? el('div', { class: 'meta' }, 'Some sources failed: ' + JSON.stringify(d.errors)) : '', items.length ? items.map(one) : el('div', { class: 'empty card' }, 'Nothing found.'));
@@ -230,18 +233,30 @@ function open(id) {
   form.addEventListener('submit', async e => {
     e.preventDefault();
     if (!getKey()) { out.replaceChildren(errBox('Add your API key', 'Paste it in the field at the top and press Save.')); $('#apikey').focus(); return; }
+    CALLS = [];
     btn.disabled = true; out.replaceChildren(el('div', { class: 'loading' }, el('i'), el('i'), el('i'), 'Working…'));
     try {
       const { kind, data } = await current.run({ ...vals });
       const node = kind === 'files' ? await R.files() : R[kind](data);
-      out.replaceChildren(node);
+      out.replaceChildren(apiBox(CALLS.find(c => c.path.startsWith('/v1/') && !c.path.includes('/files/'))), node);
     } catch (err) {
-      out.replaceChildren(errBox(err.status === 401 ? 'API key rejected' : 'Something went wrong', err.status === 401 ? 'Check the key in the Render dashboard: your service > Environment > API_KEYS.' : err.message));
+      out.replaceChildren(errBox(err.status === 401 ? 'API key rejected' : 'Something went wrong', err.status === 401 ? 'Check the key in the Render dashboard: your service > Environment > API_KEYS.' : err.message), apiBox(CALLS.find(c => c.path.startsWith('/v1/'))));
     }
     btn.disabled = false;
   });
   refresh();
   $('#tool').replaceChildren(el('div', { class: 'toolhead' }, el('h1', {}, current.name), el('p', {}, current.desc)), form, out);
+}
+const fullKey = u => u + (u.includes('?') ? '&' : '?') + 'apikey=' + encodeURIComponent(getKey());
+function apiBox(c) {
+  if (!c) return '';
+  const url = location.origin + c.path;
+  const shown = c.method === 'GET' ? url + (url.includes('?') ? '&' : '?') + 'apikey=YOUR_KEY' : url;
+  const curl = c.method === 'GET' ? `curl -H "X-API-Key: ${getKey() || 'YOUR_KEY'}" "${url}"`
+    : `curl -X ${c.method} -H "X-API-Key: ${getKey() || 'YOUR_KEY'}" -H "Content-Type: application/json" -d '${JSON.stringify(c.json || {})}' "${url}"`;
+  const cp = (label, text) => el('button', { class: 'sm', onclick: e => { navigator.clipboard.writeText(text); const t = e.target; t.textContent = 'Copied'; setTimeout(() => t.textContent = label, 1200); } }, label);
+  return el('div', { class: 'card apibox' }, el('div', { class: 'bar' }, el('span', {}, 'API request'), el('span', { class: 'actions' }, c.method === 'GET' ? cp('Copy URL', fullKey(url)) : cp('Copy URL', url), cp('Copy cURL', curl))),
+    el('pre', { class: 'json mono', style: 'white-space:pre-wrap;word-break:break-all;margin:0' }, `${c.method} ${shown}` + (c.json ? '\n' + JSON.stringify(c.json, null, 2) : '')));
 }
 const errBox = (t, m) => el('div', { class: 'card err' }, el('b', {}, t), m);
 
