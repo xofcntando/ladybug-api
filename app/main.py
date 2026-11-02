@@ -2,7 +2,6 @@ import csv
 import io
 import json
 import re
-import uuid
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
@@ -11,6 +10,10 @@ from pydantic import BaseModel, Field
 
 from . import ai, config
 from .fetch import fetch_bytes
+from .storage import meta_path, save
+from .image import router as image_router
+from .seo import router as seo_router
+from .utils import router as utils_router
 from .scrape import router as scrape_router
 from .security import require_key
 
@@ -18,6 +21,9 @@ app = FastAPI(title="Ladybug API", version="1.0.0",
               description="Download, file and AI APIs. Send X-API-Key on every /v1 request.")
 auth = [Depends(require_key)]
 app.include_router(scrape_router, dependencies=auth)
+app.include_router(image_router, dependencies=auth)
+app.include_router(seo_router, dependencies=auth)
+app.include_router(utils_router, dependencies=auth)
 
 
 @app.get("/")
@@ -31,22 +37,8 @@ def health():
 
 
 # ---------------------------------------------------------------- files ----
-def _meta_path(fid: str):
-    if not re.fullmatch(r"[a-f0-9]{32}", fid):
-        raise HTTPException(400, "Bad file id")
-    return config.STORAGE_DIR / f"{fid}.json", config.STORAGE_DIR / f"{fid}.bin"
-
-
-def _save(data: bytes, filename: str, content_type: str) -> dict:
-    if len(data) > config.MAX_FILE_BYTES:
-        raise HTTPException(413, f"File exceeds {config.MAX_FILE_BYTES // 1048576} MB limit")
-    fid = uuid.uuid4().hex
-    mp, bp = _meta_path(fid)
-    bp.write_bytes(data)
-    meta = {"id": fid, "filename": filename, "content_type": content_type, "size": len(data),
-            "download_url": f"/v1/files/{fid}/download"}
-    mp.write_text(json.dumps(meta))
-    return meta
+_meta_path = meta_path
+_save = save
 
 
 @app.post("/v1/files", dependencies=auth, tags=["files"])
@@ -191,3 +183,46 @@ async def ai_classify(r: ClassifyReq):
     label = out["text"].strip()
     out["label"] = label if label in r.labels else next((l for l in r.labels if l.lower() in label.lower()), None)
     return out
+
+
+class SeoMetaReq(BaseModel):
+    content: str = Field(min_length=1, max_length=20000, description="Page text or product info")
+    language: str = "English"
+
+
+class ReplyReq(BaseModel):
+    message: str = Field(min_length=1, max_length=10000, description="Customer message")
+    context: str = Field("", description="Order info, policies, facts the reply may use")
+    tone: str = "warm and professional"
+    language: str = "same language as the customer message"
+
+
+class RewriteReq(TextReq):
+    instruction: str = "Improve clarity and make it more persuasive"
+
+
+@app.post("/v1/ai/seo-meta", dependencies=auth, tags=["ai"])
+async def ai_seo_meta(r: SeoMetaReq):
+    """Meta title (<=60 chars) and description (<=155 chars) plus 5 keywords, as JSON."""
+    out = await ai.complete(r.content, f"Write SEO metadata in {r.language}. Return raw JSON only: "
+                            '{"title": "<=60 chars", "description": "<=155 chars", "keywords": ["5 items"]}', 400, 0.4)
+    m = re.search(r"\{.*\}", out["text"], re.S)
+    try:
+        out["seo"] = json.loads(m.group(0))
+    except Exception:
+        out["seo"] = None
+    return out
+
+
+@app.post("/v1/ai/customer-reply", dependencies=auth, tags=["ai"])
+async def ai_reply(r: ReplyReq):
+    """Draft a reply to a customer message. Draft only, nothing is sent."""
+    p = f"Customer message:\n{r.message}\n\nFacts you may use:\n{r.context or 'none'}"
+    s = (f"You write customer support replies. Tone: {r.tone}. Language: {r.language}. "
+         "Only use the facts given; if something is unknown, say you will check. Output only the reply.")
+    return await ai.complete(p, s, 800, 0.4)
+
+
+@app.post("/v1/ai/rewrite", dependencies=auth, tags=["ai"])
+async def ai_rewrite(r: RewriteReq):
+    return await ai.complete(r.text, f"Rewrite the user's text. Instruction: {r.instruction}. Output only the rewritten text.", 2048, 0.5)

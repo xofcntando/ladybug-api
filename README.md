@@ -3,17 +3,19 @@
 FastAPI service with file, download and AI endpoints. Auth: `X-API-Key` header on all `/v1` routes. Interactive docs at `/docs`.
 
 ## Endpoints
-| Method | Path | Purpose |
-|---|---|---|
-| GET | /health | Health check (no auth) |
-| POST | /v1/files | Upload file (multipart `file`) |
-| GET | /v1/files, /v1/files/{id} | List / info |
-| GET | /v1/files/{id}/download | Download stored file |
-| DELETE | /v1/files/{id} | Delete |
-| POST | /v1/download/fetch `{url}` | Fetch remote URL server-side and store it |
-| GET | /v1/download/proxy?url= | Stream a remote file back |
-| POST | /v1/export/csv `{rows}` | JSON rows to CSV download |
-| POST | /v1/ai/chat, summarize, translate, product-description, classify | AI endpoints |
+All under `/v1` need `X-API-Key`. Full interactive list at `/docs`.
+
+| Group | Endpoints |
+|---|---|
+| Files | `POST /files`, `GET /files`, `GET /files/{id}`, `GET /files/{id}/download`, `DELETE /files/{id}` |
+| Download | `POST /download/fetch`, `GET /download/proxy?url=`, `POST /export/csv` |
+| Scrape | `POST /scrape/page`, `/scrape/extract`, `/scrape/product`, `/scrape/ai-extract`, `GET /scrape/sitemap` |
+| Image | `POST /image/resize`, `/convert`, `/grayscale`, `/blur`, `/circle`, `/colors`; `GET /qr?data=` |
+| SEO | `POST /seo/audit`, `POST /seo/links-check` |
+| Utils | `GET /utils/email-validate`, `/utils/dns`, `/utils/uuid`, `/utils/currency`; `POST /utils/slug`, `/utils/hash` |
+| AI | `POST /ai/chat`, `/summarize`, `/translate`, `/product-description`, `/classify`, `/seo-meta`, `/customer-reply`, `/rewrite` |
+
+`GET /health` needs no key.
 
 ## Deploy on Render
 1. Push this folder to a GitHub repo.
