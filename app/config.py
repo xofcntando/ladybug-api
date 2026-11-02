@@ -19,3 +19,5 @@ TTS_MODEL = os.getenv("TTS_MODEL", "tts-1")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
+YT_PROXY = os.getenv("YT_PROXY", "")  # optional: http(s)/socks5 proxy URL, e.g. a residential proxy

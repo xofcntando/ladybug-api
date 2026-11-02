@@ -37,3 +37,5 @@ services:
         sync: false
       - key: GROQ_API_KEY        # free key from console.groq.com/keys
         sync: false
+      - key: YT_PROXY            # optional: residential proxy URL if YouTube blocks Render's IPs
+        sync: false

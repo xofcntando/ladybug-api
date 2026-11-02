@@ -44,6 +44,8 @@ def _opts(tmp: Path, extra: dict) -> dict:
          "max_filesize": config.MEDIA_MAX_MB * 1024 * 1024,
          "match_filter": _too_long,
          "remote_components": ["ejs:github"]}
+    if config.YT_PROXY:
+        o["proxy"] = config.YT_PROXY
     if config.YT_COOKIES:
         cf = tmp / "cookies.txt"
         cf.write_text(config.YT_COOKIES)
@@ -56,7 +58,7 @@ def _err(e: Exception) -> HTTPException:
     msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e))
     low = msg.lower()
     if "sign in to confirm" in low or "bot" in low:
-        return HTTPException(502, "YouTube blocked this server (bot check). Set YT_COOKIES or retry later.")
+        return HTTPException(502, "YouTube blocked this server (bot check) on every method. Set YT_COOKIES or YT_PROXY in Render, or retry later.")
     if "private" in low or "login" in low or "age" in low and "restrict" in low:
         return HTTPException(403, "Video is private, age-restricted or needs login")
     if "unsupported url" in low:
@@ -64,13 +66,41 @@ def _err(e: Exception) -> HTTPException:
     return HTTPException(502, "Download failed: " + msg[-250:])
 
 
+CLIENT_CHAIN = [None]  # alternate player clients were tested and do not get past the IP bot check
+
+
+def _is_block(e: Exception) -> bool:
+    m = str(e).lower()
+    return "sign in to confirm" in m or "not a bot" in m or "po token" in m or "http error 403" in m
+
+
+def _with_clients(fn):
+    """Run fn(extra_opts); if YouTube shows a bot check, retry with other player clients."""
+    last = None
+    for clients in CLIENT_CHAIN:
+        extra = {"extractor_args": {"youtube": {"player_client": clients}}} if clients else {}
+        try:
+            return fn(extra)
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if not _is_block(e):
+                raise
+    raise last
+
+
 def _info(url: str) -> dict:
-    with tempfile.TemporaryDirectory() as d:
-        with yt_dlp.YoutubeDL(_opts(Path(d), {"skip_download": True})) as y:
-            return y.extract_info(url, download=False)
+    def go(extra):
+        with tempfile.TemporaryDirectory() as d:
+            with yt_dlp.YoutubeDL(_opts(Path(d), {"skip_download": True, **extra})) as y:
+                return y.extract_info(url, download=False)
+    return _with_clients(go)
 
 
 def _download(url: str, kind: str, quality: int) -> tuple[dict, Path]:
+    return _with_clients(lambda extra: _download_once(url, kind, quality, extra))
+
+
+def _download_once(url: str, kind: str, quality: int, client_opts: dict) -> tuple[dict, Path]:
     d = Path(tempfile.mkdtemp(prefix="lb_"))
     if kind == "audio":
         extra = {"format": "bestaudio/best",
@@ -79,6 +109,7 @@ def _download(url: str, kind: str, quality: int) -> tuple[dict, Path]:
         h = quality
         extra = {"format": f"bv*[height<={h}][vcodec^=avc1]+ba[ext=m4a]/b[height<={h}][vcodec^=avc1]/bv*[height<={h}][ext=mp4]+ba[ext=m4a]/b[height<={h}]/b",
                  "merge_output_format": "mp4"}
+    extra.update(client_opts)
     with yt_dlp.YoutubeDL(_opts(d, extra)) as y:
         info = y.extract_info(url, download=True)
     ext = "mp3" if kind == "audio" else "mp4"
