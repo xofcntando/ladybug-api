@@ -33,3 +33,7 @@ services:
         value: gpt-image-1
       - key: TTS_MODEL
         value: tts-1
+      - key: GEMINI_API_KEY      # free key from aistudio.google.com/apikey
+        sync: false
+      - key: GROQ_API_KEY        # free key from console.groq.com/keys
+        sync: false

@@ -32,7 +32,7 @@ Only download content you own or have permission to use; downloading from these 
 ## Deploy on Render
 1. Push this folder to a GitHub repo.
 2. Render dashboard: New > Blueprint > pick the repo (it reads `render.yaml`).
-3. Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. `API_KEYS` is auto-generated (Environment tab); comma-separate to add more.
+3. Set one AI key: `GEMINI_API_KEY` or `GROQ_API_KEY` (both have free tiers), or `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`. Image and speech endpoints need `OPENAI_API_KEY`. `API_KEYS` is auto-generated (Environment tab); comma-separate to add more.
 4. Free plan disk is ephemeral: stored files vanish on redeploy/restart. For permanent storage, use a paid plan and add to the service:
    `disk: {name: files, mountPath: /var/data, sizeGB: 1}` and set `STORAGE_DIR=/var/data`.
 

@@ -16,3 +16,6 @@ YT_COOKIES = os.getenv("YT_COOKIES", "")  # optional: Netscape-format cookies te
 
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "gpt-image-1")
 TTS_MODEL = os.getenv("TTS_MODEL", "tts-1")
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
