@@ -23,6 +23,7 @@ from .utils import router as utils_router
 from .media import router as media_router
 from .ai_media import router as ai_media_router
 from .anime import router as anime_router
+from .music import router as music_router
 from .cards import router as cards_router
 from .scrape import router as scrape_router
 from .security import require_key
@@ -73,6 +74,7 @@ app.include_router(utils_router, dependencies=auth)
 app.include_router(media_router, dependencies=auth)
 app.include_router(ai_media_router, dependencies=auth)
 app.include_router(anime_router, dependencies=auth)
+app.include_router(music_router, dependencies=auth)
 app.include_router(cards_router, dependencies=auth)
 
 

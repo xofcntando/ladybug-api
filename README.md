@@ -17,6 +17,7 @@ All under `/v1` need `X-API-Key`. Full interactive list at `/docs`.
 | SEO | `POST /seo/audit`, `POST /seo/links-check` |
 | Utils | `GET /utils/email-validate`, `/utils/dns`, `/utils/uuid`, `/utils/currency`; `POST /utils/slug`, `/utils/hash` |
 | Media | `GET /media/ytmp3?url=`, `/media/ytmp4?url=&quality=720`, `/media/download?url=&type=audio|video`, `/media/info?url=` |
+| Music | `GET /music/sources`, `/music/search?q=&source=all|archive|ccmixter|openverse|audius&limit=&commercial_only=`, `/music/trending`, `/music/info?id=`, `/music/download?id=&stream=true` |
 | Anime | `GET /anime/search?q=`, `/info?q=` or `?id=`, `/top?by=score|popularity|trending`, `/random`, `/season`, `/airing`, `/character?q=`, `/quote`, `/image?category=waifu|neko|husbando|kitsune`, `/react?action=hug|pat|kiss|...`, `/actions`, `/trace?url=` (screenshot -> anime). `raw=true` on image/react returns the file itself. SFW only. |
 | Cards | `GET/POST /welcome` and `/goodbye` return a 1024x450 "Ladybug Crafting" card. Options: `username`, `avatar` (URL), `group`, `count`, `message`, `background` (URL), `theme` (ladybug, dark, light, sakura, ocean, forest), `format` (png, jpeg, webp), `brand` (true/false), `store`. Example: `/v1/welcome?username=Sam&avatar=URL&group=My%20Group&count=128&apikey=KEY` |
 | AI | `POST /ai/chat`, `/summarize`, `/translate`, `/product-description`, `/classify`, `/seo-meta`, `/customer-reply`, `/rewrite` |
@@ -30,6 +31,17 @@ MP3 is 192 kbps; MP4 is H.264+AAC (plays everywhere). Limits: `MEDIA_MAX_MINUTES
 YouTube sometimes blocks cloud IPs; if you see a bot-check error, set `YT_COOKIES`. Keep `yt-dlp` fresh by redeploying (it installs the latest release at build time).
 Only download content you own or have permission to use; downloading from these sites can breach their terms.
 
+
+### Free music downloads (no YouTube, no video sites)
+`/v1/music/*` searches and downloads only openly licensed music from official public APIs, no scraping:
+[Internet Archive](https://archive.org), [ccMixter](https://ccmixter.org), [Openverse](https://openverse.org) (Jamendo, Freesound, Wikimedia) and [Audius](https://audius.co) (only tracks whose artist picked a Creative Commons licence). Jamendo direct is enabled when you set `JAMENDO_CLIENT_ID` (free key from developer.jamendo.com).
+Every result has `license`, `commercial_use` (false = NonCommercial or all rights reserved, null = unknown, check the page) and a ready `attribution` line. Keep that attribution when you reuse a track.
+
+    GET /v1/music/search?q=ambient%20piano&commercial_only=true
+    GET /v1/music/download?id=ccmixter:22364            -> JSON with file.download_url
+    GET /v1/music/download?id=archive:ID&stream=true     -> the audio file itself
+
+IDs look like `source:id`. Downloads are cached for `MEDIA_TTL_MINUTES` and capped at `MEDIA_MAX_MB`. Openverse can take 20-40 s on a first uncached query, so in `source=all` it may be reported under `errors` while the others still return.
 
 ## What works without any keys
 Everything except text AI works out of the box. AI endpoints fall back automatically: text -> Pollinations (keyless, but only 1 request / 45 s per IP), images -> Pollinations Flux, speech -> Microsoft Edge neural voices (any voice name, e.g. `hu-HU-NoemiNeural`), moderation -> the text model.

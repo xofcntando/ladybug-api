@@ -39,6 +39,29 @@ const R = {
   },
   links: d => el('div', { class: 'card' }, el('p', {}, `Checked ${d.checked} links. `, el('b', {}, `${d.broken_count} broken.`)),
     el('table', {}, el('tr', {}, el('th', {}, 'Status'), el('th', {}, 'URL')), d.all.map(x => el('tr', {}, el('td', {}, el('span', { class: 'pill' + (x.status && x.status < 400 ? '' : ' bad') }, x.status ?? x.error)), el('td', { class: 'mono' }, x.url))))),
+  music: d => {
+    const items = d.results || [];
+    const one = m => {
+      const slot = el('div', { class: 'actions' });
+      const btn = el('button', { class: 'sm', onclick: async () => {
+        btn.disabled = true; btn.textContent = 'Fetching…';
+        try {
+          const j = await api('/v1/music/download?' + qs({ id: m.id }));
+          const { blob } = await api(j.file.download_url, { blob: true });
+          saveBlob(blob, j.file.filename); btn.textContent = 'Saved (' + bytes(j.file.size) + ')';
+        } catch (e) { btn.textContent = 'Failed: ' + e.message; } btn.disabled = false;
+      } }, 'Download');
+      slot.append(btn, m.page_url ? el('a', { class: 'sm', href: m.page_url, target: '_blank', rel: 'noopener' }, 'Source page') : '');
+      return el('div', { class: 'card media' }, m.thumbnail ? el('img', { src: m.thumbnail, alt: '', referrerpolicy: 'no-referrer' }) : el('div'),
+        el('div', {}, el('h2', {}, m.title), el('div', { class: 'meta' }, [m.artist, mins(m.duration), m.source, m.license, m.commercial_use === false ? 'non-commercial' : ''].filter(Boolean).join('  ·  ')),
+          m.preview_url && m.source !== 'archive' ? el('audio', { src: m.preview_url, controls: '', preload: 'none', style: 'width:100%;margin:8px 0' }) : '', slot,
+          el('div', { class: 'meta' }, m.attribution)));
+    };
+    return el('div', {}, d.errors ? el('div', { class: 'meta' }, 'Some sources failed: ' + JSON.stringify(d.errors)) : '', items.length ? items.map(one) : el('div', { class: 'empty card' }, 'Nothing found.'));
+  },
+  musicfile: d => el('div', { class: 'card media' }, el('div'), el('div', {}, el('h2', {}, d.title), el('div', { class: 'meta' }, [d.artist, d.license].filter(Boolean).join('  ·  ')),
+    (() => { const h = el('div', {}, 'Fetching file…'); api(d.file.download_url, { blob: true }).then(({ blob }) => h.replaceChildren(el('audio', { src: URL.createObjectURL(blob), controls: '' }), el('button', { class: 'go', onclick: () => saveBlob(blob, d.file.filename) }, `Save (${bytes(d.file.size)})`))).catch(e => h.replaceChildren(e.message)); return h; })(),
+    el('div', { class: 'meta' }, d.attribution))),
   media: d => {
     const f = d.file, isA = d.type === 'audio';
     const holder = el('div', {}, el('div', { class: 'loading' }, el('i'), el('i'), el('i'), 'Fetching file…'));
@@ -108,6 +131,12 @@ const TOOLS = [
     fields: [T('url', 'Link', { ph: 'https://www.youtube.com/watch?v=…' }), S('type', 'Format', [['audio', 'MP3 audio'], ['video', 'MP4 video']]), S('quality', 'Video quality', Q, { def: '720', show: v => v.type === 'video' })], submit: 'Download',
     run: async v => ({ kind: 'media', data: await api('/v1/media/download?' + qs({ url: v.url, type: v.type, quality: v.quality })) }) },
   { g: 'Media', id: 'info', name: 'Video info', desc: 'Title, length, thumbnail and available qualities without downloading.', fields: [T('url', 'Link')], submit: 'Get info', run: get('/v1/media/info', 'info') },
+
+  { g: 'Music', id: 'm-search', name: 'Free music search', desc: 'Search openly licensed music (Internet Archive, ccMixter, Openverse, Audius CC tracks). Preview, download, and copy the attribution line.',
+    fields: [T('q', 'Song, artist or mood', { ph: 'ambient piano' }), S('source', 'Source', [['all', 'All sources'], ['archive', 'Internet Archive'], ['ccmixter', 'ccMixter'], ['openverse', 'Openverse'], ['audius', 'Audius (CC)']]), S('commercial_only', 'Licence', [['false', 'Any open licence'], ['true', 'Commercial use allowed']]), { k: 'limit', label: 'Results per source', type: 'number', def: 5 }], submit: 'Search', run: get('/v1/music/search', 'music') },
+  { g: 'Music', id: 'm-trend', name: 'Trending free music', desc: 'Popular Creative Commons tracks on Audius right now.', fields: [{ k: 'limit', label: 'Results', type: 'number', def: 10 }], submit: 'Show', run: get('/v1/music/trending', 'music') },
+  { g: 'Music', id: 'm-dl', name: 'Download by ID', desc: 'Use an ID from the search, like archive:confluence-1 or ccmixter:22364.', fields: [T('id', 'Track ID', { ph: 'ccmixter:22364' })], submit: 'Download',
+    run: async v => ({ kind: 'musicfile', data: await api('/v1/music/download?' + qs({ id: v.id })) }) },
 
   { g: 'Scrape', id: 'page', name: 'Scrape a page', desc: 'Title, meta tags, headings, links, images, structured data and clean text from any public page.', fields: [URL_F()], submit: 'Scrape', run: post('/v1/scrape/page') },
   { g: 'Scrape', id: 'product', name: 'Product data', desc: 'Name, price, currency, stock and rating from a product page.', fields: [URL_F('https://shop.com/products/…')], submit: 'Extract', run: post('/v1/scrape/product') },
