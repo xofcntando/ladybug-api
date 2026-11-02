@@ -21,3 +21,11 @@ services:
         sync: false
       - key: AI_MODEL
         sync: false
+      - key: MEDIA_MAX_MB
+        value: "100"
+      - key: MEDIA_MAX_MINUTES
+        value: "20"
+      - key: MEDIA_TTL_MINUTES
+        value: "60"
+      - key: YT_COOKIES          # optional: Netscape cookies.txt contents, helps when YouTube shows a bot check
+        sync: false

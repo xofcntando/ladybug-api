@@ -1,5 +1,7 @@
 import json
 import re
+import shutil
+import time
 import uuid
 
 from fastapi import HTTPException
@@ -21,5 +23,31 @@ def save(data: bytes, filename: str, content_type: str) -> dict:
     bp.write_bytes(data)
     meta = {"id": fid, "filename": filename, "content_type": content_type, "size": len(data),
             "download_url": f"/v1/files/{fid}/download"}
+    mp.write_text(json.dumps(meta))
+    return meta
+
+
+def cleanup() -> None:
+    """Delete expired (media) files."""
+    now = time.time()
+    for mp in config.STORAGE_DIR.glob("*.json"):
+        try:
+            m = json.loads(mp.read_text())
+            if m.get("expires_at") and m["expires_at"] < now:
+                mp.unlink()
+                mp.with_suffix(".bin").unlink(missing_ok=True)
+        except Exception:
+            continue
+
+
+def save_path(path, filename: str, content_type: str, ttl_minutes: int) -> dict:
+    """Move a finished file on disk into storage (no RAM copy). Expires after ttl_minutes."""
+    cleanup()
+    fid = uuid.uuid4().hex
+    mp, bp = meta_path(fid)
+    size = path.stat().st_size
+    shutil.move(str(path), str(bp))
+    meta = {"id": fid, "filename": filename, "content_type": content_type, "size": size,
+            "download_url": f"/v1/files/{fid}/download", "expires_at": time.time() + ttl_minutes * 60}
     mp.write_text(json.dumps(meta))
     return meta

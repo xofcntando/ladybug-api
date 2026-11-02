@@ -8,3 +8,8 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 AI_MODEL = os.getenv("AI_MODEL", "")
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+MEDIA_MAX_MB = int(os.getenv("MEDIA_MAX_MB", "100"))
+MEDIA_MAX_MINUTES = int(os.getenv("MEDIA_MAX_MINUTES", "20"))
+MEDIA_TTL_MINUTES = int(os.getenv("MEDIA_TTL_MINUTES", "60"))
+YT_COOKIES = os.getenv("YT_COOKIES", "")  # optional: Netscape-format cookies text, helps with YouTube bot checks

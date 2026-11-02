@@ -7,3 +7,5 @@ beautifulsoup4>=4.12.3
 pillow>=11.0.0
 qrcode>=8.0
 dnspython>=2.7.0
+yt-dlp[default]>=2025.10.22
+imageio-ffmpeg>=0.5.1

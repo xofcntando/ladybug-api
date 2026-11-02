@@ -3,17 +3,18 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Query
 
 from . import config
 
 
-async def require_key(x_api_key: str = Header(default="")):
+async def require_key(x_api_key: str = Header(default=""), apikey: str = Query(default="")):
     """Every /v1 route needs a valid X-API-Key header."""
+    x_api_key = x_api_key or apikey
     if not config.API_KEYS:
         raise HTTPException(503, "Server has no API_KEYS configured")
     if not any(hmac.compare_digest(x_api_key, k) for k in config.API_KEYS):
-        raise HTTPException(401, "Invalid or missing X-API-Key")
+        raise HTTPException(401, "Invalid or missing API key (X-API-Key header or ?apikey=)")
 
 
 def assert_public_url(url: str) -> None:
