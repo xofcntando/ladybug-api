@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: ladybug-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: API_KEYS            # auto-generated secret; read it in Render dashboard > Environment
+        generateValue: true
+      - key: STORAGE_DIR
+        value: /tmp/ladybug-files   # ephemeral on free plan; see README for persistent disk
+      - key: MAX_FILE_MB
+        value: "25"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AI_MODEL
+        sync: false

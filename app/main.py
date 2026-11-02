@@ -1,0 +1,193 @@
+import csv
+import io
+import json
+import re
+import uuid
+from typing import Any, Literal
+
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel, Field
+
+from . import ai, config
+from .fetch import fetch_bytes
+from .scrape import router as scrape_router
+from .security import require_key
+
+app = FastAPI(title="Ladybug API", version="1.0.0",
+              description="Download, file and AI APIs. Send X-API-Key on every /v1 request.")
+auth = [Depends(require_key)]
+app.include_router(scrape_router, dependencies=auth)
+
+
+@app.get("/")
+def root():
+    return {"name": "Ladybug API", "docs": "/docs", "health": "/health"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------- files ----
+def _meta_path(fid: str):
+    if not re.fullmatch(r"[a-f0-9]{32}", fid):
+        raise HTTPException(400, "Bad file id")
+    return config.STORAGE_DIR / f"{fid}.json", config.STORAGE_DIR / f"{fid}.bin"
+
+
+def _save(data: bytes, filename: str, content_type: str) -> dict:
+    if len(data) > config.MAX_FILE_BYTES:
+        raise HTTPException(413, f"File exceeds {config.MAX_FILE_BYTES // 1048576} MB limit")
+    fid = uuid.uuid4().hex
+    mp, bp = _meta_path(fid)
+    bp.write_bytes(data)
+    meta = {"id": fid, "filename": filename, "content_type": content_type, "size": len(data),
+            "download_url": f"/v1/files/{fid}/download"}
+    mp.write_text(json.dumps(meta))
+    return meta
+
+
+@app.post("/v1/files", dependencies=auth, tags=["files"])
+async def upload_file(file: UploadFile = File(...)):
+    """Upload a file; returns its id and download path."""
+    data = await file.read(config.MAX_FILE_BYTES + 1)
+    return _save(data, file.filename or "file", file.content_type or "application/octet-stream")
+
+
+@app.get("/v1/files", dependencies=auth, tags=["files"])
+def list_files():
+    items = [json.loads(p.read_text()) for p in config.STORAGE_DIR.glob("*.json")]
+    return {"count": len(items), "files": items}
+
+
+@app.get("/v1/files/{fid}", dependencies=auth, tags=["files"])
+def file_info(fid: str):
+    mp, _ = _meta_path(fid)
+    if not mp.exists():
+        raise HTTPException(404, "Not found")
+    return json.loads(mp.read_text())
+
+
+@app.get("/v1/files/{fid}/download", dependencies=auth, tags=["files"])
+def download_file(fid: str):
+    mp, bp = _meta_path(fid)
+    if not mp.exists() or not bp.exists():
+        raise HTTPException(404, "Not found")
+    m = json.loads(mp.read_text())
+    return FileResponse(bp, media_type=m["content_type"], filename=m["filename"])
+
+
+@app.delete("/v1/files/{fid}", dependencies=auth, tags=["files"])
+def delete_file(fid: str):
+    mp, bp = _meta_path(fid)
+    if not mp.exists():
+        raise HTTPException(404, "Not found")
+    mp.unlink()
+    bp.unlink(missing_ok=True)
+    return {"deleted": fid}
+
+
+# ------------------------------------------------------------- download ----
+class FetchReq(BaseModel):
+    url: str
+    filename: str | None = None
+
+
+async def _fetch(url: str) -> tuple[bytes, str, str]:
+    data, ctype, name, _ = await fetch_bytes(url)
+    return data, ctype, name
+
+
+@app.post("/v1/download/fetch", dependencies=auth, tags=["download"])
+async def fetch_and_store(req: FetchReq):
+    """Download a remote URL server-side and store it. Returns file id + download path."""
+    data, ctype, name = await _fetch(req.url)
+    return _save(data, req.filename or name, ctype)
+
+
+@app.get("/v1/download/proxy", dependencies=auth, tags=["download"])
+async def proxy_download(url: str):
+    """Download a remote URL and stream it straight back (nothing stored)."""
+    data, ctype, name = await _fetch(url)
+    return Response(data, media_type=ctype, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+class CsvReq(BaseModel):
+    rows: list[dict[str, Any]]
+    filename: str = "export.csv"
+
+
+@app.post("/v1/export/csv", dependencies=auth, tags=["download"])
+def export_csv(req: CsvReq):
+    """Turn JSON rows into a downloadable CSV."""
+    if not req.rows:
+        raise HTTPException(400, "rows is empty")
+    cols = list(dict.fromkeys(k for r in req.rows for k in r))
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=cols)
+    w.writeheader()
+    w.writerows(req.rows)
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{req.filename}"'})
+
+
+# ------------------------------------------------------------------- ai ----
+class ChatReq(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20000)
+    system: str = ""
+    max_tokens: int = Field(1024, ge=1, le=4096)
+    temperature: float = Field(0.4, ge=0, le=1)
+
+
+class TextReq(BaseModel):
+    text: str = Field(min_length=1, max_length=30000)
+
+
+class TranslateReq(TextReq):
+    target_language: str
+
+
+class DescribeReq(BaseModel):
+    product_name: str
+    details: str = ""
+    tone: str = "friendly and persuasive"
+    language: str = "English"
+    length: Literal["short", "medium", "long"] = "medium"
+
+
+class ClassifyReq(TextReq):
+    labels: list[str] = Field(min_length=2)
+
+
+@app.post("/v1/ai/chat", dependencies=auth, tags=["ai"])
+async def ai_chat(r: ChatReq):
+    return await ai.complete(r.prompt, r.system, r.max_tokens, r.temperature)
+
+
+@app.post("/v1/ai/summarize", dependencies=auth, tags=["ai"])
+async def ai_summarize(r: TextReq):
+    return await ai.complete(r.text, "Summarize the text in a few clear sentences. Output only the summary.")
+
+
+@app.post("/v1/ai/translate", dependencies=auth, tags=["ai"])
+async def ai_translate(r: TranslateReq):
+    return await ai.complete(r.text, f"Translate the user's text into {r.target_language}. Output only the translation.", 2048, 0.2)
+
+
+@app.post("/v1/ai/product-description", dependencies=auth, tags=["ai"])
+async def ai_describe(r: DescribeReq):
+    p = f"Product: {r.product_name}\nDetails: {r.details}"
+    s = (f"Write a {r.length} e-commerce product description in {r.language}, tone: {r.tone}. "
+         "No em dashes. Output only the description.")
+    return await ai.complete(p, s, 1024, 0.7)
+
+
+@app.post("/v1/ai/classify", dependencies=auth, tags=["ai"])
+async def ai_classify(r: ClassifyReq):
+    s = f"Classify the text into exactly one of: {', '.join(r.labels)}. Output only the label."
+    out = await ai.complete(r.text, s, 20, 0)
+    label = out["text"].strip()
+    out["label"] = label if label in r.labels else next((l for l in r.labels if l.lower() in label.lower()), None)
+    return out
