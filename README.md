@@ -18,6 +18,7 @@ All under `/v1` need `X-API-Key`. Full interactive list at `/docs`.
 | Utils | `GET /utils/email-validate`, `/utils/dns`, `/utils/uuid`, `/utils/currency`; `POST /utils/slug`, `/utils/hash` |
 | Media | `GET /media/ytmp3?url=`, `/media/ytmp4?url=&quality=720`, `/media/download?url=&type=audio|video`, `/media/info?url=` |
 | Music | `GET /music/sources`, `/music/search?q=&source=all|archive|ccmixter|openverse|audius&limit=&commercial_only=`, `/music/trending`, `/music/info?id=`, `/music/download?id=&stream=true` |
+| More (KnightBot) | `GET /lyrics?query=`, `/screenshot?url=`, `/image/removebg?url=`, `/cards/rank|quote|wanted|jail|ytcard`, `/fake/tweet|ytcomment`, `/fun/joke|meme|roast|insult|compliment|flirt`, `/yt/search?query=`, `/yt/play?query=&type=audio|video` |
 | Anime | `GET /anime/search?q=`, `/info?q=` or `?id=`, `/top?by=score|popularity|trending`, `/random`, `/season`, `/airing`, `/character?q=`, `/quote`, `/image?category=waifu|neko|husbando|kitsune`, `/react?action=hug|pat|kiss|...`, `/actions`, `/trace?url=` (screenshot -> anime). `raw=true` on image/react returns the file itself. SFW only. |
 | Cards | `GET/POST /welcome` and `/goodbye` return a 1024x450 "Ladybug Crafting" card. Options: `username`, `avatar` (URL), `group`, `count`, `message`, `background` (URL), `theme` (ladybug, dark, light, sakura, ocean, forest), `format` (png, jpeg, webp), `brand` (true/false), `store`. Example: `/v1/welcome?username=Sam&avatar=URL&group=My%20Group&count=128&apikey=KEY` |
 | AI | `POST /ai/chat`, `/summarize`, `/translate`, `/product-description`, `/classify`, `/seo-meta`, `/customer-reply`, `/rewrite` |
@@ -42,6 +43,9 @@ Every result has `license`, `commercial_use` (false = NonCommercial or all right
     GET /v1/music/download?id=archive:ID&stream=true     -> the audio file itself
 
 IDs look like `source:id`. Downloads are cached for `MEDIA_TTL_MINUTES` and capped at `MEDIA_MAX_MB`. Openverse can take 20-40 s on a first uncached query, so in `source=all` it may be reported under `errors` while the others still return.
+
+### KnightBot extras
+The endpoints under *More* are served through the [KnightBot API](https://knightbotapi.stream). The default key `knight` is shared by every user of that service (30 requests/min, 200/hour, 3000/day in total), so you will see `429` often. Set your own `KNIGHT_API_KEY` in Render for real traffic. Not included on purpose: Spotify track ripping and NSFW tools.
 
 ## What works without any keys
 Everything except text AI works out of the box. AI endpoints fall back automatically: text -> Pollinations (keyless, but only 1 request / 45 s per IP), images -> Pollinations Flux, speech -> Microsoft Edge neural voices (any voice name, e.g. `hu-HU-NoemiNeural`), moderation -> the text model.
