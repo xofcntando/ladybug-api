@@ -13,7 +13,7 @@ All under `/v1` need `X-API-Key`. Full interactive list at `/docs`.
 | Files | `POST /files`, `GET /files`, `GET /files/{id}`, `GET /files/{id}/download`, `DELETE /files/{id}` |
 | Download | `POST /download/fetch`, `GET /download/proxy?url=`, `POST /export/csv` |
 | Scrape | `POST /scrape/page`, `/scrape/extract`, `/scrape/product`, `/scrape/ai-extract`, `GET /scrape/sitemap` |
-| Image | `POST /image/resize`, `/convert`, `/grayscale`, `/blur`, `/circle`, `/colors`; `GET /qr?data=` |
+| Image | `POST /image/resize`, `/convert`, `/grayscale`, `/blur`, `/circle`, `/pixelate`, `/upscale`, `/meme`, `/ascii`, `/colors`; `GET /qr?data=` |
 | SEO | `POST /seo/audit`, `POST /seo/links-check` |
 | Utils | `GET /utils/email-validate`, `/utils/dns`, `/utils/uuid`, `/utils/currency`; `POST /utils/slug`, `/utils/hash` |
 | Media | `GET /media/ytmp3?url=`, `/media/ytmp4?url=&quality=720`, `/media/download?url=&type=audio|video`, `/media/info?url=` |

@@ -27,6 +27,8 @@ const R = {
   text: d => el('div', { class: 'card' }, copyBar(`${d.provider || ''} ${d.model || ''}`.trim(), d.text), el('div', { class: 'text' }, d.text),
     d.seo ? el('pre', { class: 'json', style: 'margin-top:14px' }, JSON.stringify(d.seo, null, 2)) : ''),
   image: ({ blob, name }) => { const u = URL.createObjectURL(blob); return el('div', { class: 'card pic' }, el('div', { class: 'bar' }, el('span', {}, `${bytes(blob.size)}`), el('button', { class: 'sm', onclick: () => saveBlob(blob, name) }, 'Save image')), el('img', { src: u, alt: 'Result' })); },
+  ascii: d => el('div', { class: 'card' }, copyBar('ASCII', d.ascii), el('pre', { class: 'json', style: 'line-height:1;font-size:8px' }, d.ascii)),
+  audio: ({ blob, name }) => { const u = URL.createObjectURL(blob); return el('div', { class: 'card' }, el('audio', { src: u, controls: '', style: 'width:100%' }), el('div', { class: 'actions', style: 'margin-top:12px' }, el('button', { class: 'go', onclick: () => saveBlob(blob, name) }, 'Save MP3'))); },
   colors: d => el('div', { class: 'card' }, el('div', { class: 'swatches' }, d.colors.map(c => el('div', { class: 'sw' }, el('div', { style: `background:${c.hex}` }), el('div', {}, c.hex, el('br'), c.percent + '%'))))),
   audit: d => {
     const c = d.score >= 80 ? 'var(--ok)' : d.score >= 55 ? 'var(--warn)' : 'var(--red)';
@@ -64,7 +66,18 @@ const URL_F = (ph = 'https://…') => ({ k: 'url', label: 'Page URL', ph });
 const T = (k, label, o = {}) => ({ k, label, type: 'text', ...o });
 const S = (k, label, opts, o = {}) => ({ k, label, type: 'select', opts, ...o });
 const Q = [['360', '360p'], ['480', '480p'], ['720', '720p (HD)'], ['1080', '1080p (Full HD)']];
-const IMG = (f) => async v => { const r = await api(f(v), { method: 'POST', json: { ...v, width: +v.width || null, height: +v.height || null, level: +v.level || 10, size: +v.size || 512, quality: +v.quality || 85 }, blob: true }); return { kind: 'image', data: { blob: r.blob, name: 'ladybug-image.' + (v.format || 'png') } }; };
+const IMG = f => async v => {
+  const j = { url: v.url, format: v.format, quality: +v.quality || 85 };
+  if (v.op === 'resize') Object.assign(j, { width: +v.width || null, height: +v.height || null, fit: v.fit });
+  if (v.op === 'blur') j.level = +v.level || 10;
+  if (v.op === 'circle') j.size = +v.size || 512;
+  if (v.op === 'pixelate') j.size = +v.pix || 16;
+  if (v.op === 'upscale') j.scale = +v.scale || 2;
+  if (v.op === 'meme') Object.assign(j, { top: v.top, bottom: v.bottom });
+  if (v.op === 'ascii') { const d = await api('/v1/image/ascii', { method: 'POST', json: { url: v.url, width: +v.awidth || 80 } }); return { kind: 'ascii', data: d }; }
+  const r = await api(f(v), { method: 'POST', json: j, blob: true });
+  return { kind: 'image', data: { blob: r.blob, name: 'ladybug-image.' + (v.format || 'png') } };
+};
 const post = (path, map = v => v, kind = 'json') => async v => ({ kind, data: await api(path, { method: 'POST', json: map(v) }) });
 const get = (path, kind = 'json') => async v => ({ kind, data: await api(path + '?' + qs(v)) });
 
@@ -83,10 +96,12 @@ const TOOLS = [
   { g: 'Scrape', id: 'sitemap', name: 'Sitemap URLs', desc: 'List every URL in a site’s sitemap.', fields: [T('url', 'Site or sitemap URL', { ph: 'https://shop.com' }), { k: 'limit', label: 'Max URLs', type: 'number', def: 200 }], submit: 'List URLs', run: get('/v1/scrape/sitemap') },
 
   { g: 'Images', id: 'img', name: 'Edit an image', desc: 'Resize, convert, compress, grayscale, blur or crop to a circle.', submit: 'Process',
-    fields: [T('url', 'Image URL', { ph: 'https://…/photo.jpg' }), S('op', 'Action', [['resize', 'Resize'], ['convert', 'Convert / compress'], ['grayscale', 'Grayscale'], ['blur', 'Blur'], ['circle', 'Circle crop']]),
+    fields: [T('url', 'Image URL', { ph: 'https://…/photo.jpg' }), S('op', 'Action', [['resize', 'Resize'], ['convert', 'Convert / compress'], ['grayscale', 'Grayscale'], ['blur', 'Blur'], ['circle', 'Circle crop'], ['pixelate', 'Pixelate'], ['upscale', 'Upscale'], ['meme', 'Meme text'], ['ascii', 'ASCII art']]),
       { k: 'width', label: 'Width (px)', type: 'number', show: v => v.op === 'resize' }, { k: 'height', label: 'Height (px)', type: 'number', show: v => v.op === 'resize' },
       S('fit', 'Fit', [['contain', 'Keep whole image'], ['cover', 'Fill and crop'], ['stretch', 'Stretch']], { show: v => v.op === 'resize' }),
       { k: 'level', label: 'Blur level (1-100)', type: 'number', def: 20, show: v => v.op === 'blur' }, { k: 'size', label: 'Size (px)', type: 'number', def: 512, show: v => v.op === 'circle' },
+      { k: 'pix', label: 'Pixel size', type: 'number', def: 16, show: v => v.op === 'pixelate' }, { k: 'scale', label: 'Scale (2-4x)', type: 'number', def: 2, show: v => v.op === 'upscale' },
+      T('top', 'Top text', { show: v => v.op === 'meme' }), T('bottom', 'Bottom text', { show: v => v.op === 'meme' }), { k: 'awidth', label: 'Characters wide', type: 'number', def: 80, show: v => v.op === 'ascii' },
       S('format', 'Output', [['png', 'PNG'], ['jpeg', 'JPEG'], ['webp', 'WebP']]), { k: 'quality', label: 'Quality', type: 'number', def: 85, show: v => v.format !== 'png' }],
     run: v => IMG(x => '/v1/image/' + x.op)(v) },
   { g: 'Images', id: 'colors', name: 'Dominant colors', desc: 'Pull the main colors from an image.', fields: [T('url', 'Image URL'), { k: 'count', label: 'Colors', type: 'number', def: 5 }], submit: 'Find colors', run: post('/v1/image/colors', v => ({ url: v.url, count: +v.count }), 'colors') },
@@ -97,6 +112,11 @@ const TOOLS = [
   { g: 'SEO', id: 'links', name: 'Broken links', desc: 'Checks the links on a page and lists the ones that fail.', fields: [URL_F(), { k: 'max_links', label: 'Links to check', type: 'number', def: 30 }], submit: 'Check links', run: post('/v1/seo/links-check', v => ({ url: v.url, max_links: +v.max_links }), 'links') },
 
   { g: 'AI', id: 'chat', name: 'Ask AI', desc: 'Send any prompt.', fields: [{ k: 'prompt', label: 'Prompt', type: 'textarea' }, T('system', 'Instructions (optional)', { ph: 'You are a helpful shop assistant' })], submit: 'Ask', run: post('/v1/ai/chat', v => v, 'text') },
+  { g: 'AI', id: 'aiimg', name: 'AI image', desc: 'Generate an image from a description. Needs an OpenAI key on the server.', fields: [{ k: 'prompt', label: 'Describe the image', type: 'textarea', ph: 'A ceramic mug on a sunlit wooden table, product photo' }, S('size', 'Shape', [['1024x1024', 'Square'], ['1536x1024', 'Landscape'], ['1024x1536', 'Portrait']])], submit: 'Generate',
+    run: async v => { const r = await api('/v1/ai/image', { method: 'POST', json: { prompt: v.prompt, size: v.size }, blob: true }); return { kind: 'image', data: { blob: r.blob, name: 'ai-image.png' } }; } },
+  { g: 'AI', id: 'tts', name: 'Text to speech', desc: 'Turn text into an MP3 voice-over.', fields: [{ k: 'text', label: 'Text', type: 'textarea' }, S('voice', 'Voice', ['alloy', 'ash', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'].map(x => [x, x]))], submit: 'Speak',
+    run: async v => { const r = await api('/v1/ai/tts', { method: 'POST', json: { text: v.text, voice: v.voice }, blob: true }); return { kind: 'audio', data: { blob: r.blob, name: 'speech.mp3' } }; } },
+  { g: 'AI', id: 'mod', name: 'Safety check', desc: 'Flags unsafe or adult text and images. Use it on customer uploads.', fields: [{ k: 'text', label: 'Text (optional)', type: 'textarea' }, T('image_url', 'Image URL (optional)')], submit: 'Check', run: post('/v1/ai/moderate', v => ({ text: v.text || null, image_url: v.image_url || null })) },
   { g: 'AI', id: 'desc', name: 'Product description', desc: 'Write a description for a product.', fields: [T('product_name', 'Product'), { k: 'details', label: 'Details', type: 'textarea', ph: 'Material, size, who it is for…' }, T('tone', 'Tone', { def: 'friendly and persuasive' }), T('language', 'Language', { def: 'English' }), S('length', 'Length', [['short', 'Short'], ['medium', 'Medium'], ['long', 'Long']], { def: 'medium' })], submit: 'Write', run: post('/v1/ai/product-description', v => v, 'text') },
   { g: 'AI', id: 'seo', name: 'SEO title and description', desc: 'Meta title, meta description and keywords from page content.', fields: [{ k: 'content', label: 'Page or product text', type: 'textarea' }, T('language', 'Language', { def: 'English' })], submit: 'Generate', run: post('/v1/ai/seo-meta', v => v, 'text') },
   { g: 'AI', id: 'reply', name: 'Customer reply', desc: 'Draft an answer to a customer. Nothing is sent.', fields: [{ k: 'message', label: 'Customer message', type: 'textarea' }, { k: 'context', label: 'Facts to use', type: 'textarea', ph: 'Order status, return policy…' }, T('tone', 'Tone', { def: 'warm and professional' })], submit: 'Draft reply', run: post('/v1/ai/customer-reply', v => v, 'text') },

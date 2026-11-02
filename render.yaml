@@ -29,3 +29,7 @@ services:
         value: "60"
       - key: YT_COOKIES          # optional: Netscape cookies.txt contents, helps when YouTube shows a bot check
         sync: false
+      - key: IMAGE_MODEL
+        value: gpt-image-1
+      - key: TTS_MODEL
+        value: tts-1

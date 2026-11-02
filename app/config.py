@@ -13,3 +13,6 @@ MEDIA_MAX_MB = int(os.getenv("MEDIA_MAX_MB", "100"))
 MEDIA_MAX_MINUTES = int(os.getenv("MEDIA_MAX_MINUTES", "20"))
 MEDIA_TTL_MINUTES = int(os.getenv("MEDIA_TTL_MINUTES", "60"))
 YT_COOKIES = os.getenv("YT_COOKIES", "")  # optional: Netscape-format cookies text, helps with YouTube bot checks
+
+IMAGE_MODEL = os.getenv("IMAGE_MODEL", "gpt-image-1")
+TTS_MODEL = os.getenv("TTS_MODEL", "tts-1")

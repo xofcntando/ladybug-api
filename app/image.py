@@ -4,7 +4,7 @@ from typing import Literal
 import qrcode
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
-from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from pydantic import BaseModel, Field
 
 from .fetch import fetch_bytes
@@ -139,3 +139,72 @@ def qr(data: str = Query(min_length=1, max_length=2000), size: int = Query(512, 
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return Response(buf.getvalue(), media_type="image/png")
+
+
+class PixelReq(ImgReq):
+    size: int = Field(16, ge=2, le=100)
+
+
+class UpscaleReq(ImgReq):
+    scale: int = Field(2, ge=2, le=4)
+
+
+class MemeReq(ImgReq):
+    top: str = Field("", max_length=120)
+    bottom: str = Field("", max_length=120)
+
+
+class AsciiReq(BaseModel):
+    url: str
+    width: int = Field(80, ge=20, le=160)
+
+
+@router.post("/image/pixelate")
+async def pixelate(r: PixelReq):
+    img = (await load(r.url)).convert("RGBA")
+    small = img.resize((max(1, img.width // r.size), max(1, img.height // r.size)), Image.BILINEAR)
+    return out(small.resize(img.size, Image.NEAREST), r, "pixelated")
+
+
+@router.post("/image/upscale")
+async def upscale(r: UpscaleReq):
+    """Lanczos resize (sharper than stretching, not AI upscaling). Output capped at 4096px."""
+    img = await load(r.url)
+    w, h = img.width * r.scale, img.height * r.scale
+    if max(w, h) > 4096:
+        raise HTTPException(400, "Result would exceed 4096px")
+    return out(img.resize((w, h), Image.LANCZOS), r, "upscaled")
+
+
+@router.post("/image/meme")
+async def meme(r: MemeReq):
+    img = (await load(r.url)).convert("RGB")
+    d = ImageDraw.Draw(img)
+    fs = max(18, img.width // 10)
+    font = ImageFont.load_default(size=fs)
+
+    def put(text, bottom):
+        text = text.upper()
+        f = ImageFont.load_default(size=fs)
+        while d.textlength(text, font=f) > img.width * 0.94 and f.size > 12:
+            f = ImageFont.load_default(size=f.size - 2)
+        tw = d.textlength(text, font=f)
+        y = img.height - f.size * 1.5 if bottom else f.size * 0.3
+        d.text(((img.width - tw) / 2, y), text, font=f, fill="white", stroke_width=max(2, f.size // 10), stroke_fill="black")
+
+    if r.top:
+        put(r.top, False)
+    if r.bottom:
+        put(r.bottom, True)
+    return out(img, r, "meme")
+
+
+@router.post("/image/ascii")
+async def ascii_art(r: AsciiReq):
+    img = ImageOps.grayscale(await load(r.url))
+    h = max(1, int(img.height / img.width * r.width * 0.5))
+    img = img.resize((r.width, h))
+    chars = "@%#*+=-:. "
+    px = list(img.getdata())
+    rows = ["".join(chars[p * (len(chars) - 1) // 255] for p in px[i * r.width:(i + 1) * r.width]) for i in range(h)]
+    return {"width": r.width, "height": h, "ascii": "\n".join(rows)}
