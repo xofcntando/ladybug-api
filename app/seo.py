@@ -1,12 +1,12 @@
 import asyncio
 from urllib.parse import urljoin, urlparse
 
-import httpx
 from bs4 import BeautifulSoup
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .fetch import UA, fetch_bytes
+from .fetch import BROWSER_HEADERS, fetch_bytes
+from .http import client
 from .security import assert_public_url
 
 router = APIRouter(prefix="/v1/seo", tags=["seo"])
@@ -27,7 +27,7 @@ async def audit(r: UrlReq):
     data, ctype, _, url = await fetch_bytes(r.url)
     if "html" not in ctype:
         raise HTTPException(415, "Not an HTML page")
-    s = BeautifulSoup(data.decode("utf-8", "replace"), "html.parser")
+    s = BeautifulSoup(data.decode("utf-8", "replace"), "lxml")
     issues, ok = [], []
 
     def chk(cond, good, bad):
@@ -51,6 +51,8 @@ async def audit(r: UrlReq):
     robots = s.find("meta", attrs={"name": "robots"})
     chk(not (robots and "noindex" in (robots.get("content") or "").lower()), "Page is indexable", "Page is set to noindex")
     chk(url.startswith("https"), "Uses HTTPS", "Not served over HTTPS")
+    for t in s(["script", "style", "noscript"]):
+        t.decompose()
     words = len(s.get_text(" ").split())
     chk(words >= 300, f"Content length OK ({words} words)", f"Thin content ({words} words)")
     score = round(100 * len(ok) / (len(ok) + len(issues)))
@@ -62,27 +64,33 @@ async def audit(r: UrlReq):
 async def links_check(r: LinksReq):
     """Find broken links on a page (checks up to max_links, internal first)."""
     data, ctype, _, url = await fetch_bytes(r.url)
-    s = BeautifulSoup(data.decode("utf-8", "replace"), "html.parser")
+    s = BeautifulSoup(data.decode("utf-8", "replace"), "lxml")
     host = urlparse(url).netloc
     links = list(dict.fromkeys(urljoin(url, a["href"]).split("#")[0] for a in s.find_all("a", href=True)
                                if a["href"].startswith(("http", "/")) or not a["href"].startswith(("#", "mailto:", "tel:", "javascript:"))))
     links.sort(key=lambda l: urlparse(l).netloc != host)
     links = links[: r.max_links]
-    sem = asyncio.Semaphore(8)
+    c = client()
 
-    async with httpx.AsyncClient(timeout=10, headers={"User-Agent": UA}) as c:
-        async def one(l):
-            async with sem:
-                try:
-                    assert_public_url(l)
-                    resp = await c.head(l)
+    async def one(l):
+        async with sem:
+            try:
+                for _ in range(4):  # follow redirects by hand so every hop is SSRF-checked
+                    await assert_public_url(l)
+                    resp = await c.head(l, headers=BROWSER_HEADERS, timeout=10)
                     if resp.status_code in (403, 405, 501):
-                        resp = await c.get(l)
-                    return {"url": l, "status": resp.status_code}
-                except HTTPException as e:
-                    return {"url": l, "status": None, "error": e.detail}
-                except Exception as e:
-                    return {"url": l, "status": None, "error": type(e).__name__}
-        res = await asyncio.gather(*(one(l) for l in links))
-    broken = [x for x in res if x["status"] is None or x["status"] >= 400]
+                        resp = await c.get(l, headers=BROWSER_HEADERS, timeout=10)
+                    if resp.is_redirect and resp.headers.get("location"):
+                        l = str(resp.url.join(resp.headers["location"]))
+                        continue
+                    break
+                return {"url": l, "status": resp.status_code}
+            except HTTPException as e:
+                return {"url": l, "status": None, "error": e.detail}
+            except Exception as e:
+                return {"url": l, "status": None, "error": type(e).__name__}
+    sem = asyncio.Semaphore(16)
+    res = await asyncio.gather(*(one(l) for l in links))
+    # 429 means "slow down", not "broken"
+    broken = [x for x in res if x["status"] is None or (x["status"] >= 400 and x["status"] != 429)]
     return {"page": url, "checked": len(res), "broken_count": len(broken), "broken": broken, "all": res}

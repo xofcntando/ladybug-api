@@ -29,6 +29,13 @@ YouTube sometimes blocks cloud IPs; if you see a bot-check error, set `YT_COOKIE
 Only download content you own or have permission to use; downloading from these sites can breach their terms.
 
 
+## What works without any keys
+Everything except text AI works out of the box. AI endpoints fall back automatically: text -> Pollinations (keyless, but only 1 request / 45 s per IP), images -> Pollinations Flux, speech -> Microsoft Edge neural voices (any voice name, e.g. `hu-HU-NoemiNeural`), moderation -> the text model.
+For fast AI add a free `GROQ_API_KEY` (fastest) or `GEMINI_API_KEY`. If several keys are set they are tried in order (Groq, Gemini, OpenAI, Anthropic) and a failing provider falls through to the next. `AI_PROVIDER` forces the first choice.
+
+## Performance
+Shared HTTP connection pool, async DNS (cached), 60 s page cache, cached DNS/currency/AI (deterministic) results, CPU work in threads, lxml parsing, and a self-ping so the free Render instance does not fall asleep (set `SELF_PING=0` to disable).
+
 ## Deploy on Render
 1. Push this folder to a GitHub repo.
 2. Render dashboard: New > Blueprint > pick the repo (it reads `render.yaml`).

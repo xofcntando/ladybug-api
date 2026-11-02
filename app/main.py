@@ -1,18 +1,22 @@
+import asyncio
 import csv
 import io
 import json
+import os
 import re
+from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from pydantic import BaseModel, Field
 
-from . import ai, config
+from . import ai, config, http
 from .fetch import fetch_bytes
-from .storage import meta_path, save
+from .storage import cleanup, meta_path, save
 from .image import router as image_router
 from .seo import router as seo_router
 from .utils import router as utils_router
@@ -21,8 +25,44 @@ from .ai_media import router as ai_media_router
 from .scrape import router as scrape_router
 from .security import require_key
 
-app = FastAPI(title="Ladybug API", version="1.0.0",
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    tasks = [asyncio.create_task(_janitor())]
+    ping = os.getenv("RENDER_EXTERNAL_URL")
+    if ping and config.SELF_PING:
+        tasks.append(asyncio.create_task(_keep_awake(ping.rstrip("/") + "/health")))
+    yield
+    for t in tasks:
+        t.cancel()
+    await http.close()
+
+
+async def _janitor():
+    """Delete expired media files and orphaned temp dirs every 5 minutes."""
+    while True:
+        try:
+            await asyncio.to_thread(cleanup)
+        except Exception:  # noqa: BLE001
+            pass
+        await asyncio.sleep(300)
+
+
+async def _keep_awake(url: str):
+    """Render's free plan sleeps after 15 min without traffic, and the next request then waits ~50 s for a cold start.
+    Pinging our own public URL every 10 min keeps the instance warm."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await http.client().get(url, timeout=15)
+        except Exception:  # noqa: BLE001
+            pass
+        await asyncio.sleep(600)
+
+
+app = FastAPI(title="Ladybug API", version="1.1.0", lifespan=lifespan,
               description="Download, file and AI APIs. Send X-API-Key on every /v1 request.")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+                   expose_headers=["Content-Disposition"])
 auth = [Depends(require_key)]
 app.include_router(scrape_router, dependencies=auth)
 app.include_router(image_router, dependencies=auth)
@@ -37,12 +77,12 @@ app.mount("/ui", StaticFiles(directory=STATIC), name="ui")
 
 
 @app.get("/", include_in_schema=False)
-def root():
+async def root():
     return FileResponse(STATIC / "index.html")
 
 
 @app.get("/health")
-def health():
+async def health():
     return {"status": "ok"}
 
 
@@ -189,7 +229,7 @@ async def ai_describe(r: DescribeReq):
 @app.post("/v1/ai/classify", dependencies=auth, tags=["ai"])
 async def ai_classify(r: ClassifyReq):
     s = f"Classify the text into exactly one of: {', '.join(r.labels)}. Output only the label."
-    out = await ai.complete(r.text, s, 20, 0)
+    out = await ai.complete(r.text, s, 60, 0)
     label = out["text"].strip()
     out["label"] = label if label in r.labels else next((l for l in r.labels if l.lower() in label.lower()), None)
     return out

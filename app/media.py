@@ -2,7 +2,9 @@
 Only an allowlist of hosts is accepted so the endpoint cannot be used to probe internal networks."""
 import asyncio
 import re
+import shutil
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -10,6 +12,7 @@ import imageio_ffmpeg
 import yt_dlp
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from . import config
 from .security import assert_public_url
@@ -22,11 +25,11 @@ ALLOWED = ("youtube.com", "youtu.be", "youtube-nocookie.com", "tiktok.com", "ins
            "twitter.com", "x.com", "soundcloud.com", "vimeo.com", "dailymotion.com", "reddit.com", "pinterest.com", "twitch.tv")
 
 
-def _check_url(url: str) -> None:
+async def _check_url(url: str) -> None:
     host = (urlparse(url).hostname or "").lower()
     if not any(host == d or host.endswith("." + d) for d in ALLOWED):
         raise HTTPException(400, "Unsupported site. Allowed: " + ", ".join(ALLOWED))
-    assert_public_url(url)
+    await assert_public_url(url)
 
 
 def _too_long(info, incomplete=False):
@@ -38,12 +41,33 @@ def _too_long(info, incomplete=False):
     return None
 
 
+def _js_runtimes() -> dict:
+    """YouTube needs a JS runtime to solve its player challenge. Prefer the bundled deno, else node if installed."""
+    rt = {}
+    try:
+        import deno
+        rt["deno"] = {"path": deno.find_deno_bin()}
+    except Exception:  # noqa: BLE001
+        pass
+    if shutil.which("node"):
+        rt["node"] = {"path": shutil.which("node")}
+    if shutil.which("deno") and "deno" not in rt:
+        rt["deno"] = {"path": shutil.which("deno")}
+    return rt
+
+
+_JS = _js_runtimes()
+
+
 def _opts(tmp: Path, extra: dict) -> dict:
     o = {"quiet": True, "noprogress": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 20, "retries": 2,
          "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(), "outtmpl": str(tmp / "%(id)s.%(ext)s"),
          "max_filesize": config.MEDIA_MAX_MB * 1024 * 1024,
          "match_filter": _too_long,
-         "remote_components": ["ejs:github"]}
+         "remote_components": ["ejs:github"], "concurrent_fragment_downloads": 4,
+         "cachedir": "/tmp/yt-dlp-cache"}
+    if _JS:
+        o["js_runtimes"] = _JS
     if config.YT_PROXY:
         o["proxy"] = config.YT_PROXY
     if config.YT_COOKIES:
@@ -57,16 +81,17 @@ def _opts(tmp: Path, extra: dict) -> dict:
 def _err(e: Exception) -> HTTPException:
     msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e))
     low = msg.lower()
-    if "sign in to confirm" in low or "bot" in low:
+    if "sign in to confirm" in low or "not a bot" in low or "confirm you" in low:
         return HTTPException(502, "YouTube blocked this server (bot check) on every method. Set YT_COOKIES or YT_PROXY in Render, or retry later.")
-    if "private" in low or "login" in low or "age" in low and "restrict" in low:
+    if "private video" in low or "log in" in low or "login required" in low or "age-restricted" in low or "confirm your age" in low:
         return HTTPException(403, "Video is private, age-restricted or needs login")
     if "unsupported url" in low:
         return HTTPException(400, "Unsupported URL")
     return HTTPException(502, "Download failed: " + msg[-250:])
 
 
-CLIENT_CHAIN = [None]  # alternate player clients were tested and do not get past the IP bot check
+# Default clients first; only on a bot-check block do we retry with other YouTube player clients.
+CLIENT_CHAIN = [None, ["tv", "web_safari"], ["mweb"], ["android_vr"]]
 
 
 def _is_block(e: Exception) -> bool:
@@ -110,12 +135,16 @@ def _download_once(url: str, kind: str, quality: int, client_opts: dict) -> tupl
         extra = {"format": f"bv*[height<={h}][vcodec^=avc1]+ba[ext=m4a]/b[height<={h}][vcodec^=avc1]/bv*[height<={h}][ext=mp4]+ba[ext=m4a]/b[height<={h}]/b",
                  "merge_output_format": "mp4"}
     extra.update(client_opts)
-    with yt_dlp.YoutubeDL(_opts(d, extra)) as y:
-        info = y.extract_info(url, download=True)
-    ext = "mp3" if kind == "audio" else "mp4"
-    files = sorted(d.glob(f"*.{ext}")) or [f for f in d.iterdir() if f.suffix not in (".txt", ".part")]
-    if not files:
-        raise HTTPException(413, f"Video too long (>{config.MEDIA_MAX_MINUTES} min) or too large (>{config.MEDIA_MAX_MB} MB)")
+    try:
+        with yt_dlp.YoutubeDL(_opts(d, extra)) as y:
+            info = y.extract_info(url, download=True)
+        ext = "mp3" if kind == "audio" else "mp4"
+        files = sorted(d.glob(f"*.{ext}")) or [f for f in d.iterdir() if f.suffix not in (".txt", ".part")]
+        if not files:
+            raise HTTPException(413, f"Video too long (>{config.MEDIA_MAX_MINUTES} min) or too large (>{config.MEDIA_MAX_MB} MB)")
+    except BaseException:
+        shutil.rmtree(d, ignore_errors=True)  # never leave half-downloaded files on a small disk
+        raise
     return info, files[0]
 
 
@@ -125,7 +154,7 @@ def _brief(i: dict) -> dict:
 
 
 async def _run(url: str, kind: str, quality: int, stream: bool):
-    _check_url(url)
+    await _check_url(url)
     async with _sem:
         try:
             info, path = await asyncio.wait_for(asyncio.to_thread(_download, url, kind, quality), timeout=240)
@@ -138,20 +167,37 @@ async def _run(url: str, kind: str, quality: int, stream: bool):
     ext = path.suffix.lstrip(".")
     name = re.sub(r'[\\/:*?"<>|]+', "", info.get("title") or "media")[:80].strip() or "media"
     ctype = "audio/mpeg" if kind == "audio" else "video/mp4"
+    work_dir = path.parent
     if stream:
-        return FileResponse(path, media_type=ctype, filename=f"{name}.{ext}")
+        return FileResponse(path, media_type=ctype, filename=f"{name}.{ext}",
+                            background=BackgroundTask(shutil.rmtree, work_dir, ignore_errors=True))
     f = save_path(path, f"{name}.{ext}", ctype, config.MEDIA_TTL_MINUTES)
+    shutil.rmtree(work_dir, ignore_errors=True)
     return {"success": True, "type": kind, **_brief(info), "file": f, "expires_in_minutes": config.MEDIA_TTL_MINUTES}
+
+
+_info_cache: dict[str, tuple[float, dict]] = {}
 
 
 @router.get("/info")
 async def info(url: str):
     """Metadata only (title, duration, thumbnail, available heights)."""
-    _check_url(url)
-    try:
-        i = await asyncio.wait_for(asyncio.to_thread(_info, url), timeout=60)
-    except Exception as e:
-        raise _err(e)
+    await _check_url(url)
+    hit = _info_cache.get(url)
+    if hit and hit[0] > time.monotonic():
+        i = hit[1]
+    else:
+        try:
+            i = await asyncio.wait_for(asyncio.to_thread(_info, url), timeout=60)
+        except asyncio.TimeoutError:
+            raise HTTPException(504, "Timed out fetching video info")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise _err(e)
+        if len(_info_cache) > 100:
+            _info_cache.clear()
+        _info_cache[url] = (time.monotonic() + 600, i)
     heights = sorted({f["height"] for f in i.get("formats", []) if f.get("height") and f["height"] >= 144 and f.get("vcodec") not in (None, "none")})
     return {**_brief(i), "heights": heights, "is_live": i.get("is_live")}
 

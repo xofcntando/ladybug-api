@@ -1,9 +1,12 @@
+import asyncio
+import gzip
+import html
 import json
 import re
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from . import ai
@@ -31,7 +34,9 @@ async def _soup(url: str) -> tuple[BeautifulSoup, str]:
     data, ctype, _, final = await fetch_bytes(url)
     if "html" not in ctype and "xml" not in ctype:
         raise HTTPException(415, f"Not an HTML page ({ctype})")
-    return BeautifulSoup(data.decode("utf-8", errors="replace"), "html.parser"), final
+    text = data.decode("utf-8", errors="replace")
+    # lxml is ~5x faster than html.parser; parse off the event loop so big pages never stall other requests
+    return await asyncio.to_thread(BeautifulSoup, text, "lxml"), final
 
 
 def _meta(soup, **attrs):
@@ -54,10 +59,10 @@ def _jsonld(soup) -> list:
 
 
 def _clean_text(soup) -> str:
-    s = BeautifulSoup(str(soup), "html.parser")
-    for t in s(["script", "style", "noscript", "svg", "nav", "footer", "iframe"]):
+    """Strips noise tags in place (call this last, after everything else has been read from the soup)."""
+    for t in soup(["script", "style", "noscript", "svg", "nav", "footer", "iframe"]):
         t.decompose()
-    return re.sub(r"\s+", " ", s.get_text(" ")).strip()
+    return re.sub(r"\s+", " ", soup.get_text(" ")).strip()
 
 
 @router.post("/page")
@@ -114,32 +119,78 @@ async def scrape_product(r: UrlReq):
                 "availability": str(o.get("availability", "")).split("/")[-1] or None,
                 "rating": (prod.get("aggregateRating") or {}).get("ratingValue"),
                 "review_count": (prod.get("aggregateRating") or {}).get("reviewCount")}
-    return {"url": url, "source": "meta", "name": _meta(soup, property="og:title"),
-            "description": _meta(soup, property="og:description"),
-            "images": [x for x in [_meta(soup, property="og:image")] if x],
-            "price": _meta(soup, property="product:price:amount") or _meta(soup, property="og:price:amount"),
-            "currency": _meta(soup, property="product:price:currency") or _meta(soup, property="og:price:currency")}
+    def first(*vals):
+        return next((v for v in vals if v), None)
+
+    def itemprop(name):
+        t = soup.find(attrs={"itemprop": name})
+        return (t.get("content") or t.get_text(strip=True)) if t else None
+
+    h1 = soup.find("h1")
+    price = first(_meta(soup, property="product:price:amount"), _meta(soup, property="og:price:amount"), itemprop("price"))
+    if not price:  # last resort: a visible price-looking element
+        el = soup.select_one('[class*="price"], [id*="price"]')
+        m = re.search(r"\d[\d.,\s]*\d|\d", el.get_text(" ", strip=True)) if el else None
+        price = m.group(0).strip() if m else None
+    imgs = [x for x in [_meta(soup, property="og:image")] if x]
+    return {"url": url, "source": "meta",
+            "name": first(_meta(soup, property="og:title"), itemprop("name"), h1.get_text(strip=True) if h1 else None,
+                          soup.title.string.strip() if soup.title and soup.title.string else None),
+            "description": first(_meta(soup, property="og:description"), _meta(soup, name="description"), itemprop("description")),
+            "images": [urljoin(url, i) for i in imgs],
+            "price": price,
+            "currency": first(_meta(soup, property="product:price:currency"), _meta(soup, property="og:price:currency"), itemprop("priceCurrency"))}
+
+
+_LOC = re.compile(r"<loc>\s*(?:<!\[CDATA\[)?\s*(.*?)\s*(?:\]\]>)?\s*</loc>", re.S)
+
+
+def _locs(data: bytes) -> tuple[list[str], bool]:
+    if data[:2] == b"\x1f\x8b":  # .xml.gz sitemap
+        try:
+            data = gzip.decompress(data)
+        except Exception:
+            return [], False
+    text = data.decode("utf-8", "replace")
+    return [html.unescape(x) for x in _LOC.findall(text)], "<sitemapindex" in text[:3000]
 
 
 @router.get("/sitemap")
-async def scrape_sitemap(url: str, limit: int = 500):
-    """List URLs from a sitemap.xml (follows sitemap indexes one level deep). Pass the site root or the sitemap URL."""
-    if not url.endswith(".xml"):
-        url = urljoin(url if url.endswith("/") else url + "/", "/sitemap.xml")
-    data, _, _, final = await fetch_bytes(url)
-    locs = re.findall(r"<loc>\s*(.*?)\s*</loc>", data.decode("utf-8", "replace"))
-    if "<sitemapindex" in data.decode("utf-8", "replace")[:2000]:
-        urls = []
-        for sm in locs[:10]:
+async def scrape_sitemap(url: str, limit: int = Query(500, ge=1, le=5000)):
+    """List URLs from a sitemap.xml (follows sitemap indexes one level deep). Pass the site root or the sitemap URL.
+    If /sitemap.xml does not exist, the Sitemap: line of robots.txt is used."""
+    candidates = [url]
+    if not re.search(r"\.xml(\.gz)?(\?.*)?$", url):
+        root = urljoin(url if url.endswith("/") else url + "/", "/")
+        candidates = [urljoin(root, "/sitemap.xml"), urljoin(root, "/sitemap_index.xml")]
+        try:
+            robots, *_ = await fetch_bytes(urljoin(root, "/robots.txt"))
+            found = re.findall(r"(?im)^\s*sitemap:\s*(\S+)", robots.decode("utf-8", "replace"))
+            candidates = found[:2] + candidates
+        except HTTPException:
+            pass
+    data = final = None
+    for c in dict.fromkeys(candidates):
+        try:
+            data, _, _, final = await fetch_bytes(c)
+            break
+        except HTTPException:
+            continue
+    if data is None:
+        raise HTTPException(404, "No sitemap found")
+    locs, is_index = _locs(data)
+    if is_index:
+        async def child(sm):
             try:
                 d, *_ = await fetch_bytes(sm)
-                urls += re.findall(r"<loc>\s*(.*?)\s*</loc>", d.decode("utf-8", "replace"))
+                return _locs(d)[0]
             except HTTPException:
-                continue
-            if len(urls) >= limit:
-                break
+                return []
+        urls: list[str] = []
+        for part in await asyncio.gather(*(child(sm) for sm in locs[:10])):  # children are fetched in parallel
+            urls += part
         locs = urls
-    return {"sitemap": final, "count": len(locs[:limit]), "urls": locs[:limit]}
+    return {"sitemap": final, "count": len(locs[:limit]), "total": len(locs), "urls": locs[:limit]}
 
 
 @router.post("/ai-extract")

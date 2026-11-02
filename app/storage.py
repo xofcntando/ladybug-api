@@ -3,6 +3,7 @@ import re
 import shutil
 import time
 import uuid
+from pathlib import Path
 
 from fastapi import HTTPException
 
@@ -37,6 +38,14 @@ def cleanup() -> None:
                 mp.unlink()
                 mp.with_suffix(".bin").unlink(missing_ok=True)
         except Exception:
+            continue
+    # Orphaned media work dirs (crashed/timed-out downloads) older than an hour
+    import tempfile
+    for d in Path(tempfile.gettempdir()).glob("lb_*"):
+        try:
+            if now - d.stat().st_mtime > 3600:
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
             continue
 
 

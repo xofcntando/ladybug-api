@@ -4,7 +4,7 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*' --timeout-keep-alive 75 --no-access-log
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
@@ -36,6 +36,10 @@ services:
       - key: GEMINI_API_KEY      # free key from aistudio.google.com/apikey
         sync: false
       - key: GROQ_API_KEY        # free key from console.groq.com/keys
+        sync: false
+      - key: AI_PROVIDER         # optional: groq | gemini | openai | anthropic (default: fastest configured key)
+        sync: false
+      - key: POLLINATIONS_API_KEY  # optional: lifts the keyless AI rate limit
         sync: false
       - key: YT_PROXY            # optional: residential proxy URL if YouTube blocks Render's IPs
         sync: false

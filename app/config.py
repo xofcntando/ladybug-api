@@ -21,3 +21,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 YT_PROXY = os.getenv("YT_PROXY", "")  # optional: http(s)/socks5 proxy URL, e.g. a residential proxy
+
+AI_PROVIDER = os.getenv("AI_PROVIDER", "").strip().lower()  # optional: groq | gemini | openai | anthropic | pollinations
+POLLINATIONS_KEY = os.getenv("POLLINATIONS_API_KEY", "")     # optional; without it the keyless tier is used (1 request / 45s / IP)
+SELF_PING = os.getenv("SELF_PING", "1") != "0"               # keep a free Render instance awake

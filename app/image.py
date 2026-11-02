@@ -1,3 +1,4 @@
+import asyncio
 import io
 from typing import Literal
 
@@ -10,7 +11,7 @@ from pydantic import BaseModel, Field
 from .fetch import fetch_bytes
 from .storage import save
 
-Image.MAX_IMAGE_PIXELS = 40_000_000
+Image.MAX_IMAGE_PIXELS = 25_000_000  # keeps a 512 MB free instance safe
 router = APIRouter(prefix="/v1", tags=["image"])
 Fmt = Literal["png", "jpeg", "webp"]
 
@@ -42,13 +43,21 @@ class ColorsReq(BaseModel):
 
 
 async def load(url: str) -> Image.Image:
-    data, ctype, _, _ = await fetch_bytes(url)
-    try:
-        img = Image.open(io.BytesIO(data))
-        img.load()
-    except Exception:
-        raise HTTPException(415, "Not a readable image")
-    return ImageOps.exif_transpose(img)
+    data, ctype, _, _ = await fetch_bytes(url, cache=False)
+
+    def decode():
+        try:
+            img = Image.open(io.BytesIO(data))
+            img.load()
+        except Exception:
+            raise HTTPException(415, "Not a readable image")
+        return ImageOps.exif_transpose(img)
+    return await asyncio.to_thread(decode)
+
+
+def work(fn, *args):
+    """Run CPU-heavy Pillow work in a worker thread so one big image never blocks every other request."""
+    return asyncio.to_thread(fn, *args)
 
 
 def out(img: Image.Image, r: ImgReq, name: str = "image"):
@@ -74,55 +83,72 @@ async def resize(r: ResizeReq):
         raise HTTPException(400, "Give width and/or height")
     w = r.width or round(img.width * r.height / img.height)
     h = r.height or round(img.height * r.width / img.width)
-    if r.fit == "stretch":
-        img = img.resize((w, h), Image.LANCZOS)
-    elif r.fit == "cover":
-        img = ImageOps.fit(img, (w, h), Image.LANCZOS)
-    else:
-        img.thumbnail((w, h), Image.LANCZOS)
-    return out(img, r, "resized")
+
+    def go():
+        im = img
+        if r.fit == "stretch":
+            im = im.resize((w, h), Image.LANCZOS)
+        elif r.fit == "cover":
+            im = ImageOps.fit(im, (w, h), Image.LANCZOS)
+        else:
+            im.thumbnail((w, h), Image.LANCZOS)
+        return out(im, r, "resized")
+    return await work(go)
 
 
 @router.post("/image/convert")
 async def convert(r: ImgReq):
     """Convert format (png/jpeg/webp). Also works as a compressor via quality."""
-    return out(await load(r.url), r, "converted")
+    img = await load(r.url)
+    return await work(out, img, r, "converted")
 
 
 @router.post("/image/grayscale")
 async def grayscale(r: ImgReq):
-    return out(ImageOps.grayscale(await load(r.url)), r, "gray")
+    img = await load(r.url)
+    return await work(lambda: out(ImageOps.grayscale(img), r, "gray"))
 
 
 @router.post("/image/blur")
 async def blur(r: BlurReq):
-    return out((await load(r.url)).convert("RGBA").filter(ImageFilter.GaussianBlur(r.level / 4)), r, "blur")
+    img = await load(r.url)
+    return await work(lambda: out(img.convert("RGBA").filter(ImageFilter.GaussianBlur(r.level / 4)), r, "blur"))
 
 
 @router.post("/image/circle")
 async def circle(r: CircleReq):
     """Square-crop to a circle with transparent corners (profile pictures)."""
-    img = ImageOps.fit((await load(r.url)).convert("RGBA"), (r.size, r.size), Image.LANCZOS)
-    mask = Image.new("L", (r.size * 4,) * 2, 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, r.size * 4, r.size * 4), fill=255)
-    img.putalpha(mask.resize((r.size, r.size), Image.LANCZOS))
-    r.format = "png" if r.format == "jpeg" else r.format
-    return out(img, r, "circle")
+    src = await load(r.url)
+
+    def go():
+        img = ImageOps.fit(src.convert("RGBA"), (r.size, r.size), Image.LANCZOS)
+        mask = Image.new("L", (r.size * 4,) * 2, 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, r.size * 4, r.size * 4), fill=255)
+        img.putalpha(mask.resize((r.size, r.size), Image.LANCZOS))
+        r.format = "png" if r.format == "jpeg" else r.format  # JPEG has no transparency
+        return out(img, r, "circle")
+    return await work(go)
 
 
 @router.post("/image/colors")
 async def colors(r: ColorsReq):
     """Dominant colors as hex/rgb/percent."""
-    img = (await load(r.url)).convert("RGB")
-    img.thumbnail((200, 200))
-    q = img.quantize(colors=r.count, method=Image.MEDIANCUT)
-    pal = q.getpalette()
-    total = img.width * img.height
-    res = []
-    for count, idx in sorted(q.getcolors(), reverse=True):
-        rgb = tuple(pal[idx * 3: idx * 3 + 3])
-        res.append({"hex": "#%02x%02x%02x" % rgb, "rgb": rgb, "percent": round(count * 100 / total, 1)})
-    return {"colors": res}
+    src = await load(r.url)
+
+    def go():
+        img = src.convert("RGBA")
+        bg = Image.new("RGBA", img.size, "white")  # transparent pixels would otherwise count as black
+        img = Image.alpha_composite(bg, img).convert("RGB")
+        img.thumbnail((200, 200))
+        q = img.quantize(colors=r.count, method=Image.MEDIANCUT)
+        pal = q.getpalette()
+        total = img.width * img.height
+        res = []
+        for count, idx in sorted(q.getcolors(), reverse=True):
+            rgb = tuple(pal[idx * 3: idx * 3 + 3])
+            res.append({"hex": "#%02x%02x%02x" % rgb, "rgb": rgb, "percent": round(count * 100 / total, 1)})
+        return {"colors": res}
+    return await work(go)
 
 
 @router.get("/qr")
@@ -161,9 +187,13 @@ class AsciiReq(BaseModel):
 
 @router.post("/image/pixelate")
 async def pixelate(r: PixelReq):
-    img = (await load(r.url)).convert("RGBA")
-    small = img.resize((max(1, img.width // r.size), max(1, img.height // r.size)), Image.BILINEAR)
-    return out(small.resize(img.size, Image.NEAREST), r, "pixelated")
+    src = await load(r.url)
+
+    def go():
+        img = src.convert("RGBA")
+        small = img.resize((max(1, img.width // r.size), max(1, img.height // r.size)), Image.BILINEAR)
+        return out(small.resize(img.size, Image.NEAREST), r, "pixelated")
+    return await work(go)
 
 
 @router.post("/image/upscale")
@@ -173,7 +203,7 @@ async def upscale(r: UpscaleReq):
     w, h = img.width * r.scale, img.height * r.scale
     if max(w, h) > 4096:
         raise HTTPException(400, "Result would exceed 4096px")
-    return out(img.resize((w, h), Image.LANCZOS), r, "upscaled")
+    return await work(lambda: out(img.resize((w, h), Image.LANCZOS), r, "upscaled"))
 
 
 @router.post("/image/meme")
