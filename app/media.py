@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from . import config
+from . import config, knight
 from .security import assert_public_url
 from .storage import save_path
 
@@ -156,14 +156,24 @@ def _brief(i: dict) -> dict:
 async def _run(url: str, kind: str, quality: int, stream: bool):
     await _check_url(url)
     async with _sem:
-        try:
-            info, path = await asyncio.wait_for(asyncio.to_thread(_download, url, kind, quality), timeout=240)
-        except HTTPException:
-            raise
-        except asyncio.TimeoutError:
-            raise HTTPException(504, "Download timed out")
-        except Exception as e:
-            raise _err(e)
+        info = path = None
+        if knight.enabled(url):  # YouTube: KnightBot API first (no cloud-IP bot checks), yt-dlp as fallback
+            try:
+                info, path, _ = await knight.fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
+            except HTTPException as e:
+                if e.status_code == 413:
+                    raise
+            except Exception:  # noqa: BLE001
+                pass
+        if path is None:
+            try:
+                info, path = await asyncio.wait_for(asyncio.to_thread(_download, url, kind, quality), timeout=240)
+            except HTTPException:
+                raise
+            except asyncio.TimeoutError:
+                raise HTTPException(504, "Download timed out")
+            except Exception as e:
+                raise _err(e)
     ext = path.suffix.lstrip(".")
     name = re.sub(r'[\\/:*?"<>|]+', "", info.get("title") or "media")[:80].strip() or "media"
     ctype = "audio/mpeg" if kind == "audio" else "video/mp4"
