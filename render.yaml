@@ -26,7 +26,11 @@ services:
       - key: MEDIA_MAX_MINUTES
         value: "20"
       - key: MEDIA_TTL_MINUTES
-        value: "60"
+        value: "30"
+      - key: MAX_STORAGE_MB       # downloads over this size are deleted oldest-first
+        value: "400"
+      - key: MIN_FREE_MB          # if free disk drops below this, all downloads are deleted
+        value: "150"
       - key: YT_COOKIES          # optional: Netscape cookies.txt contents, helps when YouTube shows a bot check
         sync: false
       - key: IMAGE_MODEL

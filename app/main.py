@@ -41,13 +41,17 @@ async def lifespan(_: FastAPI):
 
 
 async def _janitor():
-    """Delete expired media files and orphaned temp dirs every 5 minutes."""
+    """Keep the disk clear: wipe leftover downloads at start, then sweep every 2 minutes."""
+    try:
+        await asyncio.to_thread(cleanup, True)
+    except Exception:  # noqa: BLE001
+        pass
     while True:
         try:
             await asyncio.to_thread(cleanup)
         except Exception:  # noqa: BLE001
             pass
-        await asyncio.sleep(300)
+        await asyncio.sleep(120)
 
 
 async def _keep_awake(url: str):
@@ -116,6 +120,13 @@ def file_info(fid: str):
     if not mp.exists():
         raise HTTPException(404, "Not found")
     return json.loads(mp.read_text())
+
+
+@app.post("/v1/admin/cleanup", dependencies=auth, tags=["files"])
+async def admin_cleanup(all: bool = False):
+    """Free disk now. Removes expired downloads and abandoned temp files; all=true deletes every downloaded (media/music) file.
+    Files you uploaded yourself are kept."""
+    return await asyncio.to_thread(cleanup, all)
 
 
 @app.get("/v1/files/{fid}/download", dependencies=auth, tags=["files"])

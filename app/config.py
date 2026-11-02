@@ -11,7 +11,9 @@ STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 MEDIA_MAX_MB = int(os.getenv("MEDIA_MAX_MB", "100"))
 MEDIA_MAX_MINUTES = int(os.getenv("MEDIA_MAX_MINUTES", "20"))
-MEDIA_TTL_MINUTES = int(os.getenv("MEDIA_TTL_MINUTES", "60"))
+MEDIA_TTL_MINUTES = int(os.getenv("MEDIA_TTL_MINUTES", "30"))
+MAX_STORAGE_MB = int(os.getenv("MAX_STORAGE_MB", "400"))   # downloads beyond this are deleted oldest-first
+MIN_FREE_MB = int(os.getenv("MIN_FREE_MB", "150"))          # if the disk has less free space than this, all downloads are deleted
 YT_COOKIES = os.getenv("YT_COOKIES", "")  # optional: Netscape-format cookies text, helps with YouTube bot checks
 
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "gpt-image-1")
