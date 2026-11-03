@@ -3,8 +3,8 @@ services:
     name: ladybug-api
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*' --timeout-keep-alive 75 --no-access-log
+    buildCommand: pip install -r requirements.txt && bash scripts/setup_pot.sh
+    startCommand: bash scripts/start.sh
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION

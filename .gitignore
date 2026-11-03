@@ -2,3 +2,6 @@
 storage/
 __pycache__/
 .venv/
+
+# PO-token provider checkout (fetched at build time)
+.bgutil/

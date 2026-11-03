@@ -12,3 +12,4 @@ yt-dlp[default]>=2025.10.22
 imageio-ffmpeg>=0.5.1
 edge-tts>=7.0.0
 deno>=2.0.0
+bgutil-ytdlp-pot-provider>=2.0.2

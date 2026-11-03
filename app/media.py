@@ -100,6 +100,10 @@ def _yt_args(clients=None) -> dict:
         yt["player_client"] = clients
     if config.YT_PO_TOKEN:
         yt["po_token"] = [t.strip() for t in config.YT_PO_TOKEN.split(",") if t.strip()]
+    if config.YT_POT_PROVIDER_URL:
+        # Ask for a token on every request. On a datacenter IP the bot check is the
+        # default outcome, so waiting for yt-dlp to decide it "needs" one is too late.
+        yt["fetch_pot"] = "always"
     args: dict = {"youtube": yt} if yt else {}
     if config.YT_POT_PROVIDER_URL:
         args["youtubepot-bgutilhttp"] = {"base_url": [config.YT_POT_PROVIDER_URL]}
