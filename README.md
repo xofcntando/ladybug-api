@@ -44,6 +44,11 @@ Every result has `license`, `commercial_use` (false = NonCommercial or all right
 
 IDs look like `source:id`. Downloads are cached for `MEDIA_TTL_MINUTES` and capped at `MEDIA_MAX_MB`. Openverse can take 20-40 s on a first uncached query, so in `source=all` it may be reported under `errors` while the others still return.
 
+### KnightBot-compatible YouTube endpoints (our own backup)
+Ladybug answers the same routes and JSON shape as KnightBot, so a bot can use this service as its backup by changing only the base URL and key:
+`/api/download/ytaudio?url=&format=128kbps`, `/api/download/ytmp4?url=&format=480p`, `/api/download/ytsearch?query=`, `/api/download?type=mp3|mp4&url=`, `/api/ytmp3?query=|url=`, `/api/ytmp4?query=|url=`.
+Auth is your Ladybug key (`?apikey=` or `X-API-Key`). The returned `download` link is absolute and needs no key; it expires with the file (`MEDIA_TTL_MINUTES`). Search and downloads use KnightBot when reachable and yt-dlp otherwise (`YT_BACKEND=ytdlp` for yt-dlp only), so if both KnightBot is down and YouTube blocks your host, set `YT_COOKIES` or `YT_PROXY`. Set `PUBLIC_URL` if the links show the wrong host.
+
 ### KnightBot extras
 The endpoints under *More* are served through the [KnightBot API](https://knightbotapi.stream). The default key `knight` is shared by every user of that service (30 requests/min, 200/hour, 3000/day in total), so you will see `429` often. Set your own `KNIGHT_API_KEY` in Render for real traffic. Not included on purpose: Spotify track ripping and NSFW tools.
 
