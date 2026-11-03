@@ -187,6 +187,27 @@ def _with_clients(fn):
     raise last
 
 
+def _seconds(v) -> int | None:
+    """Normalise '4:13' / '1:02:03' / 253 to whole seconds so /info always reports seconds."""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return int(v) or None
+    s = str(v).strip()
+    if not s:
+        return None
+    if s.isdigit():
+        return int(s) or None
+    parts = s.split(":")
+    try:
+        total = 0
+        for p in parts:
+            total = total * 60 + int(float(p))
+        return total or None
+    except ValueError:
+        return None
+
+
 def _info(url: str) -> dict:
     def go(extra, proxy):
         with tempfile.TemporaryDirectory() as d:
@@ -361,9 +382,22 @@ async def info(url: str):
         except (asyncio.TimeoutError, HTTPException, Exception) as e:  # noqa: BLE001
             if knight.is_youtube(url):  # blocked or slow: oEmbed still gives title / channel / thumbnail from any IP
                 try:
-                    return {**await ytfallback.oembed(url), "heights": [], "is_live": None, "partial": True}
+                    meta = await ytfallback.oembed(url)
                 except Exception:  # noqa: BLE001
-                    pass
+                    meta = None
+                if meta is not None:
+                    # oEmbed carries no duration; a title search usually fills it in even from a blocked IP
+                    if not meta.get("duration"):
+                        try:
+                            from .knight_compat import search as _yt_search
+                            for h in await asyncio.wait_for(_yt_search(meta.get("title") or url, 5), timeout=30):
+                                if knight.canonical(h.get("url") or "") == url:
+                                    meta["duration"] = _seconds(h.get("duration"))
+                                    break
+                        except Exception:  # noqa: BLE001
+                            pass
+                    return {**meta, "heights": [], "is_live": None, "partial": True,
+                            "partial_reason": "YouTube bot-check on this server; metadata came from oEmbed/search"}
             if isinstance(e, asyncio.TimeoutError):
                 raise HTTPException(504, "Timed out fetching video info")
             raise e if isinstance(e, HTTPException) else _err(e)
