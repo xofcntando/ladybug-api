@@ -16,6 +16,8 @@ All under `/v1` need `X-API-Key`. Full interactive list at `/docs`.
 | Image | `POST /image/resize`, `/convert`, `/grayscale`, `/blur`, `/circle`, `/pixelate`, `/upscale`, `/meme`, `/ascii`, `/colors`; `GET /qr?data=` |
 | SEO | `POST /seo/audit`, `POST /seo/links-check` |
 | Utils | `GET /utils/email-validate`, `/utils/dns`, `/utils/uuid`, `/utils/currency`; `POST /utils/slug`, `/utils/hash` |
+| Dev | `POST /dev/base64/encode`, `/dev/base64/decode`, `/dev/url/encode`, `/dev/url/decode`, `/dev/html/escape`, `/dev/html/unescape`, `/dev/json/format`, `/dev/json/validate`, `/dev/case`, `/dev/text-stats`, `/dev/diff`, `/dev/regex`, `/dev/timestamp/convert`; `GET /dev/lorem`, `/dev/password`, `/dev/random`, `/dev/timestamp`, `/dev/color`, `/dev/number-base`, `/dev/jwt/decode` |
+| Web check | `GET /web/status`, `/web/headers`, `/web/robots`, `/web/ssl` |
 | Media | `GET /media/ytmp3?url=`, `/media/ytmp4?url=&quality=720`, `/media/download?url=&type=audio|video`, `/media/info?url=` |
 | Music | `GET /music/sources`, `/music/search?q=&source=all|archive|ccmixter|openverse|audius&limit=&commercial_only=`, `/music/trending`, `/music/info?id=`, `/music/download?id=&stream=true` |
 | More (KnightBot) | `GET /lyrics?query=`, `/screenshot?url=`, `/image/removebg?url=`, `/cards/rank|quote|wanted|jail|ytcard`, `/fake/tweet|ytcomment`, `/fun/joke|meme|roast|insult|compliment|flirt`, `/yt/search?query=`, `/yt/play?query=&type=audio|video` |
@@ -66,6 +68,21 @@ Ten tools we run ourselves, so they keep working when KnightBot is down or rate-
 
 ### KnightBot extras
 The remaining endpoints under *More* (screenshot, remove background, YouTube card, tweet and comment mock-ups, YouTube search/play) are served through the [KnightBot API](https://knightbotapi.stream). The default key `knight` is shared by every user of that service (30 requests/min, 200/hour, 3000/day in total), so you will see `429` often. Set your own `KNIGHT_API_KEY` in Render for real traffic. Not included on purpose: Spotify track ripping and NSFW tools.
+
+### Developer & web utilities (pure Python, no external service)
+`/v1/dev/*` are small, instant helpers built on the standard library, so they work offline and never rate-limit:
+Base64/URL/HTML encode and decode, JSON format/validate, case conversion (camel, snake, kebab, constant, ...), text
+statistics, line diff, regex tester, timestamp and epoch conversion, colour conversion (HEX/RGB/HSL with contrast
+ratios), number-base conversion, JWT decoding (header/payload only, signature is not verified), plus generators for
+lorem ipsum, passwords, random values, UUIDs and colours.
+
+`/v1/web/*` are site diagnostics that use the same SSRF guard as the rest of the service: HTTP status with the full
+redirect chain and timing, all response headers with a security-header score, a parsed robots.txt (sitemaps and rule
+counts), and live TLS certificate details (issuer, validity, days left, SANs, TLS version and cipher).
+
+    GET /v1/dev/color?hex=%23ff8800
+    POST /v1/dev/case?style=camel      {"text": "hello big world"}
+    GET /v1/web/ssl?host=github.com
 
 ## What works without any keys
 Everything except text AI works out of the box. AI endpoints fall back automatically: text -> Pollinations (keyless, but only 1 request / 45 s per IP), images -> Pollinations Flux, speech -> Microsoft Edge neural voices (any voice name, e.g. `hu-HU-NoemiNeural`), moderation -> the text model.

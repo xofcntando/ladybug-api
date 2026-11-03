@@ -29,6 +29,8 @@ from .knight_api import router as knight_router
 from .knight_compat import router as compat_router, public as compat_public
 from .cards import router as cards_router
 from .scrape import router as scrape_router
+from .devtools import router as dev_router
+from .webcheck import router as web_router
 from .security import require_key
 
 @asynccontextmanager
@@ -87,6 +89,8 @@ app.include_router(knight_router, dependencies=auth)
 app.include_router(compat_router)
 app.include_router(compat_public)
 app.include_router(cards_router, dependencies=auth)
+app.include_router(dev_router, dependencies=auth)
+app.include_router(web_router, dependencies=auth)
 
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
