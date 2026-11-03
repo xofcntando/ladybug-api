@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from . import config, knight
+from . import config, knight, ytfallback, ytdlp_update
 from .security import assert_public_url
 from .storage import meta_path, save_path
 
@@ -77,23 +77,65 @@ def _cookies_text() -> str:
     return raw + "\n"
 
 
-def _opts(tmp: Path, extra: dict) -> dict:
-    o = {"quiet": True, "noprogress": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 20, "retries": 2,
+def _proxies() -> list[str]:
+    """YT_PROXY may hold several proxies separated by commas / spaces; they are rotated per attempt."""
+    return [p.strip() for p in re.split(r"[,\s]+", config.YT_PROXY or "") if p.strip()]
+
+
+_rr = {"i": 0}
+
+
+def _next_proxy() -> str | None:
+    ps = _proxies()
+    if not ps:
+        return None
+    _rr["i"] = (_rr["i"] + 1) % len(ps)
+    return ps[_rr["i"]]
+
+
+def _yt_args(clients=None) -> dict:
+    """extractor_args for YouTube: optional player clients, a manual PO token and/or a bgutil PO-token provider."""
+    yt: dict = {}
+    if clients:
+        yt["player_client"] = clients
+    if config.YT_PO_TOKEN:
+        yt["po_token"] = [t.strip() for t in config.YT_PO_TOKEN.split(",") if t.strip()]
+    args: dict = {"youtube": yt} if yt else {}
+    if config.YT_POT_PROVIDER_URL:
+        args["youtubepot-bgutilhttp"] = {"base_url": [config.YT_POT_PROVIDER_URL]}
+    return args
+
+
+def _opts(tmp: Path, extra: dict, proxy: str | None = None) -> dict:
+    o = {"quiet": True, "noprogress": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 20, "retries": 3,
+         "fragment_retries": 5, "extractor_retries": 2, "file_access_retries": 2,
          "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(), "outtmpl": str(tmp / "%(id)s.%(ext)s"),
          "max_filesize": config.MEDIA_MAX_MB * 1024 * 1024,
          "match_filter": _too_long,
          "remote_components": ["ejs:github"], "concurrent_fragment_downloads": 4,
-         "cachedir": "/tmp/yt-dlp-cache"}
+         "cachedir": "/tmp/yt-dlp-cache", "geo_bypass": True,
+         "http_headers": {"Accept-Language": "en-US,en;q=0.9"}}
     if _JS:
         o["js_runtimes"] = _JS
-    if config.YT_PROXY:
-        o["proxy"] = config.YT_PROXY
+    px = proxy if proxy is not None else (_proxies()[0] if _proxies() else None)
+    if px:
+        o["proxy"] = px
     ck = _cookies_text()
     if ck:
         cf = tmp / "cookies.txt"
         cf.write_text(ck)
         o["cookiefile"] = str(cf)
-    o.update(extra)
+    ea = _yt_args()
+    if ea:
+        o["extractor_args"] = ea
+    for k, v in extra.items():
+        if k == "extractor_args":  # merge instead of replacing, so the PO token survives a client change
+            merged = {**o.get("extractor_args", {})}
+            for ie, kv in v.items():
+                merged[ie] = {**merged.get(ie, {}), **kv}
+            o["extractor_args"] = merged
+        else:
+            o[k] = v
     return o
 
 
@@ -101,7 +143,7 @@ def _err(e: Exception) -> HTTPException:
     msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e))
     low = msg.lower()
     if "sign in to confirm" in low or "not a bot" in low or "confirm you" in low:
-        return HTTPException(502, "YouTube blocked this server (bot check) on every method. Set YT_COOKIES or YT_PROXY in Render, or retry later.")
+        return HTTPException(502, "YouTube blocked this server (bot check) on every method. Set YT_COOKIES (from a private window) or YT_PROXY in Render, or retry later.")
     if "private video" in low or "log in" in low or "login required" in low or "age-restricted" in low or "confirm your age" in low:
         return HTTPException(403, "Video is private, age-restricted or needs login")
     if "unsupported url" in low:
@@ -109,53 +151,66 @@ def _err(e: Exception) -> HTTPException:
     return HTTPException(502, "Download failed: " + msg[-250:])
 
 
-# Default clients first; only on a bot-check block do we retry with other YouTube player clients.
-CLIENT_CHAIN = [None, ["tv", "web_safari"], ["mweb"], ["android_vr"]]
+# Default clients first (yt-dlp picks the best set for the current YouTube); on a block we walk through other player
+# clients. Order matters: clients that need no PO token and no sign-in come first. The old "tv" client is gone because
+# YouTube now answers it with "The page needs to be reloaded" for anonymous requests.
+CLIENT_CHAIN = [None, ["web_embedded", "tv_simply"], ["visionos"], ["web_safari", "mweb"], ["android_vr"], ["tv_samsung", "web"]]
+
+# Errors that no other client / proxy can fix: stop immediately instead of burning 6 attempts.
+_PERMANENT = ("private video", "has been removed", "account associated", "been terminated", "copyright", "unsupported url",
+              "live stream", "live streams are not supported", "premiere will begin", "members-only", "join this channel",
+              "not available in your country", "too long", "does not pass filter")
 
 
 def _is_block(e: Exception) -> bool:
+    """True when another client / proxy might succeed (bot check, PO token, 403/429, empty format list, stale page)."""
+    if isinstance(e, HTTPException):
+        return False
     m = str(e).lower()
-    return "sign in to confirm" in m or "not a bot" in m or "po token" in m or "http error 403" in m
+    return not any(p in m for p in _PERMANENT)
 
 
 def _with_clients(fn):
-    """Run fn(extra_opts); if YouTube shows a bot check, retry with other player clients."""
+    """Run fn(extra_opts, proxy); on a block retry with other player clients, rotating proxies when several are set."""
     last = None
-    for clients in CLIENT_CHAIN:
-        extra = {"extractor_args": {"youtube": {"player_client": clients}}} if clients else {}
+    ps = _proxies()
+    for n, clients in enumerate(CLIENT_CHAIN):
+        extra = {"extractor_args": _yt_args(clients)} if clients else {}
+        proxy = ps[n % len(ps)] if ps else None
         try:
-            return fn(extra)
+            return fn(extra, proxy)
         except Exception as e:  # noqa: BLE001
             last = e
             if not _is_block(e):
                 raise
+            time.sleep(min(1.5 * n, 4))  # small, growing pause: hammering YouTube makes the block stick
     raise last
 
 
 def _info(url: str) -> dict:
-    def go(extra):
+    def go(extra, proxy):
         with tempfile.TemporaryDirectory() as d:
-            with yt_dlp.YoutubeDL(_opts(Path(d), {"skip_download": True, **extra})) as y:
+            with yt_dlp.YoutubeDL(_opts(Path(d), {"skip_download": True, **extra}, proxy)) as y:
                 return y.extract_info(url, download=False)
     return _with_clients(go)
 
 
 def _download(url: str, kind: str, quality: int) -> tuple[dict, Path]:
-    return _with_clients(lambda extra: _download_once(url, kind, quality, extra))
+    return _with_clients(lambda extra, proxy: _download_once(url, kind, quality, extra, proxy))
 
 
-def _download_once(url: str, kind: str, quality: int, client_opts: dict) -> tuple[dict, Path]:
+def _download_once(url: str, kind: str, quality: int, client_opts: dict, proxy: str | None = None) -> tuple[dict, Path]:
     d = Path(tempfile.mkdtemp(prefix="lb_"))
     if kind == "audio":
         extra = {"format": "bestaudio/best",
                  "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}]}
     else:
         h = quality
-        extra = {"format": f"bv*[height<={h}][vcodec^=avc1]+ba[ext=m4a]/b[height<={h}][vcodec^=avc1]/bv*[height<={h}][ext=mp4]+ba[ext=m4a]/b[height<={h}]/b",
+        extra = {"format": f"bv*[height<={h}][vcodec^=avc1]+ba[ext=m4a]/b[height<={h}][vcodec^=avc1]/bv*[height<={h}][ext=mp4]+ba[ext=m4a]/b[height<={h}]/bv*+ba/b",
                  "merge_output_format": "mp4"}
     extra.update(client_opts)
     try:
-        with yt_dlp.YoutubeDL(_opts(d, extra)) as y:
+        with yt_dlp.YoutubeDL(_opts(d, extra, proxy)) as y:
             info = y.extract_info(url, download=True)
         ext = "mp3" if kind == "audio" else "mp4"
         files = sorted(d.glob(f"*.{ext}")) or [f for f in d.iterdir() if f.suffix not in (".txt", ".part")]
@@ -189,6 +244,35 @@ def _reusable(key):
     return None
 
 
+# ---- which backend to try first ----------------------------------------------------------------------------------
+# yt-dlp is the most reliable engine when it has cookies / a proxy / a PO token (a logged-in or residential request).
+# Without any of those, a datacenter IP is usually bot-checked, so the hosted backends go first. A backend that failed
+# recently is moved to the back for a few minutes so users do not wait on something that is known to be blocked.
+_health: dict[str, float] = {}  # backend -> monotonic time until which it is considered down
+
+
+def _note(backend: str, ok: bool) -> None:
+    if ok:
+        _health.pop(backend, None)
+    else:
+        _health[backend] = time.monotonic() + 300
+
+
+def _backend_order(url: str) -> list[str]:
+    if not knight.is_youtube(url):
+        return ["ytdlp"]
+    strong = bool(_cookies_text() or _proxies() or config.YT_PO_TOKEN or config.YT_POT_PROVIDER_URL)
+    order = ["ytdlp", "vda", "cobalt", "knight"] if strong else ["vda", "knight", "cobalt", "ytdlp"]
+    if not ytfallback.cobalt_enabled():
+        order.remove("cobalt")
+    if not ytfallback.vda_enabled():
+        order.remove("vda")
+    if knight.BACKEND == "ytdlp":
+        order = [b for b in order if b != "knight"]
+    now = time.monotonic()
+    return sorted(order, key=lambda b: _health.get(b, 0) > now)  # stable: healthy first, original order kept
+
+
 async def _run(url: str, kind: str, quality: int, stream: bool):
     await _check_url(url)
     url = knight.canonical(url)
@@ -201,27 +285,50 @@ async def _run(url: str, kind: str, quality: int, stream: bool):
     async with _sem:
         info = path = None
         knight.last_error = None
-        if knight.enabled(url):  # YouTube: KnightBot API first (no cloud-IP bot checks), yt-dlp as fallback
+        errors: list[str] = []
+        yt = knight.is_youtube(url)
+        order = _backend_order(url)
+        for backend in order:
+            if path is not None:
+                break
             try:
-                info, path, _ = await knight.fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
+                if backend == "knight":
+                    if not knight.enabled(url):
+                        continue
+                    info, path, _ = await knight.fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
+                elif backend == "vda":
+                    info, path, _ = await ytfallback.vda_fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
+                elif backend == "cobalt":
+                    info, path, _ = await ytfallback.cobalt_fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
+                else:
+                    info, path = await asyncio.wait_for(asyncio.to_thread(_download, url, kind, quality), timeout=240)
+                _note(backend, True)
             except HTTPException as e:
                 if e.status_code == 413:
                     raise
-            except Exception:  # noqa: BLE001
-                pass
-        if path is None:
-            try:
-                info, path = await asyncio.wait_for(asyncio.to_thread(_download, url, kind, quality), timeout=240)
-            except HTTPException:
-                raise
+                _note(backend, False)
+                errors.append(f"{backend}: {e.detail}")
+                if backend == "ytdlp" and len(order) == 1:
+                    raise
             except asyncio.TimeoutError:
-                raise HTTPException(504, "Download timed out")
-            except Exception as e:
+                _note(backend, False)
+                if len(order) == 1:
+                    raise HTTPException(504, "Download timed out")
+                errors.append(f"{backend}: timed out")
+            except Exception as e:  # noqa: BLE001
                 he = _err(e)
-                if knight.last_error and "bot check" in str(he.detail):
-                    he = HTTPException(502, f"YouTube blocks this server, and the KnightBot backup failed ({knight.last_error}). "
-                                            "Fix: set your own KNIGHT_API_KEY, or YT_PROXY / YT_COOKIES, in Render.")
-                raise he
+                if he.status_code in (400, 403) or len(order) == 1:  # private / unsupported / the only engine: say so plainly
+                    raise he
+                _note(backend, False)
+                errors.append(f"{backend}: {he.detail}")
+        if path is None:
+            tried = ", ".join(order)
+            if yt and any("bot check" in x or "blocked" in x for x in errors):
+                raise HTTPException(502, f"YouTube blocks this server on every method tried ({tried}). "
+                                         "Fix: set YT_COOKIES (exported from a private window) or YT_PROXY (residential), "
+                                         "or your own KNIGHT_API_KEY / COBALT_API_URL, in Render. Check /v1/media/status. "
+                                         f"Details: {' | '.join(errors)[-300:]}")
+            raise HTTPException(502, f"Download failed on every method tried ({tried}): {' | '.join(errors)[-300:]}")
     ext = path.suffix.lstrip(".")
     name = re.sub(r'[\\/:*?"<>|]+', "", info.get("title") or "media")[:80].strip() or "media"
     ctype = "audio/mpeg" if kind == "audio" else "video/mp4"
@@ -244,18 +351,22 @@ _info_cache: dict[str, tuple[float, dict]] = {}
 async def info(url: str):
     """Metadata only (title, duration, thumbnail, available heights)."""
     await _check_url(url)
+    url = knight.canonical(url)
     hit = _info_cache.get(url)
     if hit and hit[0] > time.monotonic():
         i = hit[1]
     else:
         try:
             i = await asyncio.wait_for(asyncio.to_thread(_info, url), timeout=60)
-        except asyncio.TimeoutError:
-            raise HTTPException(504, "Timed out fetching video info")
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise _err(e)
+        except (asyncio.TimeoutError, HTTPException, Exception) as e:  # noqa: BLE001
+            if knight.is_youtube(url):  # blocked or slow: oEmbed still gives title / channel / thumbnail from any IP
+                try:
+                    return {**await ytfallback.oembed(url), "heights": [], "is_live": None, "partial": True}
+                except Exception:  # noqa: BLE001
+                    pass
+            if isinstance(e, asyncio.TimeoutError):
+                raise HTTPException(504, "Timed out fetching video info")
+            raise e if isinstance(e, HTTPException) else _err(e)
         if len(_info_cache) > 100:
             _info_cache.clear()
         _info_cache[url] = (time.monotonic() + 600, i)
@@ -275,7 +386,11 @@ async def status():
                         "has_login_cookies": bool(names & need), "missing_login_cookies": sorted(need - names) if ck else None},
             "proxy_set": bool(config.YT_PROXY), "knight": {"enabled": knight.BACKEND != "ytdlp" and bool(knight.KEY),
                                                            "custom_key": knight.KEY != "knight", "last_error": knight.last_error},
-            "js_runtime": list(_JS)}
+            "js_runtime": list(_JS), "yt_dlp_version": ytdlp_update.version(),
+            "proxies": len(_proxies()), "po_token_set": bool(config.YT_PO_TOKEN), "pot_provider_set": bool(config.YT_POT_PROVIDER_URL),
+            "cobalt_set": ytfallback.cobalt_enabled(), "vda_set": ytfallback.vda_enabled(),
+            "backend_order": _backend_order("https://www.youtube.com/watch?v=x"),
+            "backend_down_for_s": {k: int(v - time.monotonic()) for k, v in _health.items() if v > time.monotonic()}}
 
 
 @router.get("/ytmp3")

@@ -137,10 +137,8 @@ async def fun(kind: Literal["joke", "meme", "roast", "insult", "compliment", "fl
 @router.get("/v1/yt/search")
 async def yt_search(query: str = Query(..., min_length=2, max_length=150), limit: int = Query(5, ge=1, le=10)):
     """Search YouTube by name. Returns titles, links, thumbnails, durations. Feed a link to /v1/media/ytmp3 or use /v1/yt/play."""
-    _, _, d = await call("/api/download/ytsearch", {"query": query})
-    r = _result(d)
-    r["results"] = (r.get("results") or [])[:limit]
-    return r
+    from .knight_compat import search  # yt-dlp -> YouTube results page -> KnightBot, so a block or rate limit never kills search
+    return {"query": query, "results": (await search(query, limit))[:limit]}
 
 
 @router.get("/v1/yt/play")
@@ -148,8 +146,8 @@ async def yt_play(query: str = Query(..., min_length=2, max_length=150), type: L
                   quality: int = Query(480, ge=144, le=1080), stream: bool = False):
     """Search YouTube by name and download the first match as MP3 or MP4 (same response as /v1/media/ytmp3)."""
     from .media import _run
-    _, _, d = await call("/api/download/ytsearch", {"query": query})
-    hits = (_result(d).get("results") or [])
+    from .knight_compat import search
+    hits = await search(query, 1)
     if not hits or not re.match(r"https?://(www\.)?(youtube\.com|youtu\.be)/", hits[0].get("url", "")):
         raise HTTPException(404, "No video found")
     return await _run(hits[0]["url"], type, quality, stream)

@@ -20,8 +20,8 @@ import yt_dlp
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import config
-from .media import _check_url, _opts, _run
+from . import config, ytfallback
+from .media import _check_url, _next_proxy, _opts, _run
 from .security import require_key
 from .storage import meta_path
 
@@ -51,7 +51,7 @@ def _vid(url: str) -> str | None:
 
 def _search_sync(q: str, n: int) -> list[dict]:
     with tempfile.TemporaryDirectory() as d:
-        o = _opts(Path(d), {"skip_download": True, "extract_flat": True})
+        o = _opts(Path(d), {"skip_download": True, "extract_flat": True}, _next_proxy())
         with yt_dlp.YoutubeDL(o) as y:
             info = y.extract_info(f"ytsearch{n}:{q}", download=False)
     out = []
@@ -73,14 +73,24 @@ def _fmt(sec):
 
 
 async def search(q: str, n: int = 5) -> list[dict]:
+    """yt-dlp search -> YouTube results page (no yt-dlp, works from cloud IPs) -> KnightBot search."""
     try:
         res = await asyncio.wait_for(asyncio.to_thread(_search_sync, q, n), timeout=40)
         if res:
             return res
     except Exception:  # noqa: BLE001
         pass
-    from .knight_api import call  # fall back to KnightBot search
-    _, _, d = await call("/api/download/ytsearch", {"query": q})
+    try:
+        res = await asyncio.wait_for(ytfallback.html_search(q, n), timeout=25)
+        if res:
+            return res
+    except Exception:  # noqa: BLE001
+        pass
+    from .knight_api import call  # last resort: KnightBot search
+    try:
+        _, _, d = await call("/api/download/ytsearch", {"query": q})
+    except HTTPException:
+        return []
     return ((d or {}).get("result") or {}).get("results", [])[:n]
 
 

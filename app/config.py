@@ -22,7 +22,9 @@ TTS_MODEL = os.getenv("TTS_MODEL", "tts-1")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
-YT_PROXY = os.getenv("YT_PROXY", "")  # optional: http(s)/socks5 proxy URL, e.g. a residential proxy
+YT_PROXY = os.getenv("YT_PROXY", "")  # optional: http(s)/socks5 proxy URL(s), comma separated = rotated, e.g. residential proxies
+YT_PO_TOKEN = os.getenv("YT_PO_TOKEN", "")  # optional: manual PO token(s), e.g. "web.gvs+TOKEN" (comma separated)
+YT_POT_PROVIDER_URL = os.getenv("YT_POT_PROVIDER_URL", "")  # optional: bgutil PO-token provider server, e.g. http://host:4416
 
 AI_PROVIDER = os.getenv("AI_PROVIDER", "").strip().lower()  # optional: groq | gemini | openai | anthropic | pollinations
 POLLINATIONS_KEY = os.getenv("POLLINATIONS_API_KEY", "")     # optional; without it the keyless tier is used (1 request / 45s / IP)

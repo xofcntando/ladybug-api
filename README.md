@@ -31,6 +31,16 @@ Returns JSON with a `file.download_url`; add `stream=true` to get the file itsel
 MP3 is 192 kbps; MP4 is H.264+AAC (plays everywhere). Limits: `MEDIA_MAX_MINUTES` (20) and `MEDIA_MAX_MB` (100).
 YouTube links go through the [KnightBot API](https://knightbotapi.stream) first (set `KNIGHT_API_KEY`, default `knight`; `YT_BACKEND=ytdlp` turns it off) and fall back to yt-dlp if it fails, so cloud-IP bot checks rarely matter. It is a third-party service, so uptime and the shared key are not under your control. If yt-dlp is used and YouTube blocks cloud IPs, if you see a bot-check error, set `YT_COOKIES`. Keep `yt-dlp` fresh by redeploying (it installs the latest release at build time).
 `GET /v1/media/status` checks that cookies / proxy / KnightBot are set up correctly (never shows the values). `YT_COOKIES` accepts a pasted Netscape `cookies.txt` or its base64.
+#### Staying unblocked (how the YouTube path works)
+- **Auto-updating yt-dlp:** at every start the newest yt-dlp nightly (and its JS solver) is installed into `/tmp/ytdlp-latest` and used instead of the build-time copy, because YouTube breaks old versions every few weeks. `YTDLP_AUTOUPDATE=0` disables it, `YTDLP_CHANNEL=stable` uses stable releases. `/v1/media/status` shows the running version.
+- **Backend order:** with cookies / proxy / PO token configured, yt-dlp goes first, then Cobalt (if `COBALT_API_URL`), then KnightBot. Without them KnightBot goes first. A backend that just failed is moved to the back for 5 minutes. Private/removed/unsupported videos stop immediately with a clear error.
+- **Client rotation:** on a bot check, 403/429, stale page or empty format list, yt-dlp retries with other player clients (`web_embedded`, `tv_simply`, `visionos`, `web_safari`/`mweb`, `android_vr`, ...) with a growing pause, rotating proxies if `YT_PROXY` has several (comma separated).
+- **Search never depends on one service:** yt-dlp -> YouTube results page -> KnightBot. `/v1/yt/search`, `/v1/yt/play` and the `/api/...` routes all use it.
+- **`/v1/media/info` always answers:** if yt-dlp is blocked it returns title, channel and thumbnail from YouTube oEmbed (`"partial": true`).
+- **Hosted fallback that works from Render:** set `VDA_API_KEY` ([video-download-api.com](https://video-download-api.com/api/docs), about $0.0002 per MP3/MP4, test credit for new accounts). It has its own proxy pool, so it is not bot-checked.
+- **Extra knobs:** `YT_PO_TOKEN` (manual PO token), `YT_POT_PROVIDER_URL` (a bgutil PO-token server), `COBALT_API_URL` / `COBALT_API_KEY` (your own [Cobalt](https://github.com/imputnet/cobalt) instance).
+- **Cookies:** export them from a *private/incognito* window (open youtube.com/robots.txt, export, close the window) so YouTube does not rotate them; use a throwaway account. The real fix on Render is `YT_COOKIES` or a residential `YT_PROXY`, since Render's IP ranges are often bot-checked.
+
 Only download content you own or have permission to use; downloading from these sites can breach their terms.
 
 
