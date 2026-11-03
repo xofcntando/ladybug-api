@@ -422,7 +422,13 @@ async def status():
                                                            "custom_key": knight.KEY != "knight", "last_error": knight.last_error},
             "js_runtime": list(_JS), "yt_dlp_version": ytdlp_update.version(),
             "proxies": len(_proxies()), "po_token_set": bool(config.YT_PO_TOKEN), "pot_provider_set": bool(config.YT_POT_PROVIDER_URL),
-            "cobalt_set": ytfallback.cobalt_enabled(), "vda_set": ytfallback.vda_enabled(),
+            "cobalt_set": ytfallback.cobalt_enabled(),
+            "vda_set": ytfallback.vda_enabled(),
+            "vda": {"key_present": bool(ytfallback.VDA_KEY),
+                    "key_invalid": ytfallback.vda_key_invalid,
+                    "last_error": ytfallback.vda_last_error,
+                    "hint": ("VDA_API_KEY is set but the service rejected it \u2014 copy a fresh key from "
+                             "https://video-download-api.com/dashboard") if ytfallback.vda_key_invalid else None},
             "backend_order": _backend_order("https://www.youtube.com/watch?v=x"),
             "backend_down_for_s": {k: int(v - time.monotonic()) for k, v in _health.items() if v > time.monotonic()}}
 

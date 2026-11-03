@@ -128,8 +128,14 @@ VDA_BASE = os.getenv("VDA_API_BASE", "https://p.savenow.to").rstrip("/")
 VDA_VIDEO_Q = [144, 240, 360, 480, 720, 1080]
 
 
+# Last thing VDA told us. A key that does not exist is a *configuration* error, not a transient
+# failure, so we remember it and surface it on /v1/media/status instead of retrying every request.
+vda_last_error: str | None = None
+vda_key_invalid: bool = False
+
+
 def vda_enabled() -> bool:
-    return bool(VDA_KEY)
+    return bool(VDA_KEY) and not vda_key_invalid
 
 
 async def vda_fetch(url: str, kind: str, quality: int, max_minutes: int):
@@ -145,7 +151,12 @@ async def vda_fetch(url: str, kind: str, quality: int, max_minutes: int):
     except (httpx.HTTPError, ValueError) as e:
         raise HTTPException(502, f"VDA unreachable ({type(e).__name__})")
     if r.status_code in (401, 402, 403):  # bad key / no balance: tell the owner, not the end user
-        raise HTTPException(502, f"VDA: {d.get('error_code') or d.get('message') or r.status_code}")
+        global vda_last_error, vda_key_invalid
+        msg = str(d.get("error_code") or d.get("message") or r.status_code)
+        vda_last_error = msg
+        if "key does not exist" in msg.lower() or "invalid" in msg.lower() or "unauthor" in msg.lower():
+            vda_key_invalid = True  # stop trying it until the process restarts
+        raise HTTPException(502, f"VDA: {msg}")
     jid = d.get("id")
     if r.status_code >= 400 or not jid:
         raise HTTPException(502, f"VDA could not start the job: {d.get('message') or d.get('error_code') or r.status_code}")
