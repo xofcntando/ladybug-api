@@ -45,5 +45,15 @@ services:
         sync: false
       - key: POLLINATIONS_API_KEY  # optional: lifts the keyless AI rate limit
         sync: false
-      - key: YT_PROXY            # optional: residential proxy URL if YouTube blocks Render's IPs
+      - key: YT_PROXY            # optional: residential proxy URL(s) if YouTube blocks Render's IPs (comma separated = rotated)
         sync: false
+      - key: YT_PO_TOKEN         # optional: manual PO token, e.g. web.gvs+TOKEN
+        sync: false
+      - key: YT_POT_PROVIDER_URL # optional: bgutil PO-token provider server URL
+        sync: false
+      - key: COBALT_API_URL      # optional: your own Cobalt instance as an extra YouTube backend
+        sync: false
+      - key: COBALT_API_KEY
+        sync: false
+      - key: YTDLP_AUTOUPDATE    # 1 (default) = install the newest yt-dlp nightly at every start; 0 = use requirements.txt only
+        value: "1"
