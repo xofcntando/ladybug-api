@@ -75,6 +75,23 @@ app = FastAPI(title="Ladybug API", version="1.1.0", lifespan=lifespan,
               description="Download, file and AI APIs. Send X-API-Key on every /v1 request.")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
                    expose_headers=["Content-Disposition"])
+
+
+@app.middleware("http")
+async def fresh_html(request, call_next):
+    """Never let a browser or CDN serve a stale console page.
+
+    The UI is a single-page console that changes often; caching index.html is
+    what makes a deploy look like it "didn't pick up the latest update".
+    Assets keep their ETag/Last-Modified validators so they still revalidate cheaply.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path in ("/", "/ui", "/ui/") or path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 auth = [Depends(require_key)]
 app.include_router(scrape_router, dependencies=auth)
 app.include_router(image_router, dependencies=auth)
@@ -94,7 +111,7 @@ app.include_router(web_router, dependencies=auth)
 
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
-app.mount("/ui", StaticFiles(directory=STATIC), name="ui")
+app.mount("/ui", StaticFiles(directory=STATIC, html=True), name="ui")
 
 
 @app.get("/", include_in_schema=False)
