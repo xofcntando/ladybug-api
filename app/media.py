@@ -60,6 +60,23 @@ def _js_runtimes() -> dict:
 _JS = _js_runtimes()
 
 
+def _cookies_text() -> str:
+    """YT_COOKIES may be pasted as Netscape cookies.txt (real or literal \\n newlines) or base64 of that file."""
+    raw = (config.YT_COOKIES or "").strip().strip('"').strip("'")
+    if not raw:
+        return ""
+    if "\t" not in raw and "\\t" not in raw and "youtube" not in raw.lower():
+        try:
+            import base64
+            raw = base64.b64decode(raw, validate=False).decode("utf-8", "ignore")
+        except Exception:  # noqa: BLE001
+            pass
+    raw = raw.replace("\\n", "\n").replace("\\t", "\t").replace("\r\n", "\n").replace("\r", "\n")
+    if not raw.lstrip().startswith("# Netscape") and not raw.lstrip().startswith("# HTTP Cookie"):
+        raw = "# Netscape HTTP Cookie File\n" + raw
+    return raw + "\n"
+
+
 def _opts(tmp: Path, extra: dict) -> dict:
     o = {"quiet": True, "noprogress": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 20, "retries": 2,
          "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(), "outtmpl": str(tmp / "%(id)s.%(ext)s"),
@@ -71,9 +88,10 @@ def _opts(tmp: Path, extra: dict) -> dict:
         o["js_runtimes"] = _JS
     if config.YT_PROXY:
         o["proxy"] = config.YT_PROXY
-    if config.YT_COOKIES:
+    ck = _cookies_text()
+    if ck:
         cf = tmp / "cookies.txt"
-        cf.write_text(config.YT_COOKIES)
+        cf.write_text(ck)
         o["cookiefile"] = str(cf)
     o.update(extra)
     return o
@@ -243,6 +261,21 @@ async def info(url: str):
         _info_cache[url] = (time.monotonic() + 600, i)
     heights = sorted({f["height"] for f in i.get("formats", []) if f.get("height") and f["height"] >= 144 and f.get("vcodec") not in (None, "none")})
     return {**_brief(i), "heights": heights, "is_live": i.get("is_live")}
+
+
+@router.get("/status")
+async def status():
+    """Setup check: are cookies / proxy / KnightBot configured and well-formed? Never reveals the values."""
+    ck = _cookies_text()
+    lines = [l for l in ck.splitlines() if l.strip() and not l.startswith("#")]
+    yt = [l for l in lines if "youtube.com" in l or "google.com" in l]
+    names = {l.split("\t")[5] for l in yt if len(l.split("\t")) >= 7}
+    need = {"SID", "HSID", "SSID", "APISID", "SAPISID", "__Secure-1PSID", "__Secure-3PSID", "LOGIN_INFO"}
+    return {"cookies": {"set": bool(ck), "cookie_lines": len(lines), "youtube_google_lines": len(yt),
+                        "has_login_cookies": bool(names & need), "missing_login_cookies": sorted(need - names) if ck else None},
+            "proxy_set": bool(config.YT_PROXY), "knight": {"enabled": knight.BACKEND != "ytdlp" and bool(knight.KEY),
+                                                           "custom_key": knight.KEY != "knight", "last_error": knight.last_error},
+            "js_runtime": list(_JS)}
 
 
 @router.get("/ytmp3")

@@ -30,6 +30,7 @@ Supports YouTube, TikTok, Instagram, Facebook, X, SoundCloud, Vimeo, Reddit and 
 Returns JSON with a `file.download_url`; add `stream=true` to get the file itself. Files auto-delete after `MEDIA_TTL_MINUTES` (30). The disk also clears itself: a sweep every 2 minutes removes expired and abandoned files, downloads are deleted oldest-first once they pass `MAX_STORAGE_MB` (400) or free disk drops under `MIN_FREE_MB` (150), and everything is wiped at startup. `POST /v1/admin/cleanup` (add `?all=true`) frees space on demand. Files you upload yourself are never auto-deleted.
 MP3 is 192 kbps; MP4 is H.264+AAC (plays everywhere). Limits: `MEDIA_MAX_MINUTES` (20) and `MEDIA_MAX_MB` (100).
 YouTube links go through the [KnightBot API](https://knightbotapi.stream) first (set `KNIGHT_API_KEY`, default `knight`; `YT_BACKEND=ytdlp` turns it off) and fall back to yt-dlp if it fails, so cloud-IP bot checks rarely matter. It is a third-party service, so uptime and the shared key are not under your control. If yt-dlp is used and YouTube blocks cloud IPs, if you see a bot-check error, set `YT_COOKIES`. Keep `yt-dlp` fresh by redeploying (it installs the latest release at build time).
+`GET /v1/media/status` checks that cookies / proxy / KnightBot are set up correctly (never shows the values). `YT_COOKIES` accepts a pasted Netscape `cookies.txt` or its base64.
 Only download content you own or have permission to use; downloading from these sites can breach their terms.
 
 
