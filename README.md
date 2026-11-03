@@ -49,8 +49,12 @@ Ladybug answers the same routes and JSON shape as KnightBot, so a bot can use th
 `/api/download/ytaudio?url=&format=128kbps`, `/api/download/ytmp4?url=&format=480p`, `/api/download/ytsearch?query=`, `/api/download?type=mp3|mp4&url=`, `/api/ytmp3?query=|url=`, `/api/ytmp4?query=|url=`.
 Auth is your Ladybug key (`?apikey=` or `X-API-Key`). The returned `download` link is absolute and needs no key; it expires with the file (`MEDIA_TTL_MINUTES`). Search and downloads use KnightBot when reachable and yt-dlp otherwise (`YT_BACKEND=ytdlp` for yt-dlp only), so if both KnightBot is down and YouTube blocks your host, set `YT_COOKIES` or `YT_PROXY`. Set `PUBLIC_URL` if the links show the wrong host.
 
+### Ladybug's own tools (no KnightBot needed)
+Ten tools we run ourselves, so they keep working when KnightBot is down or rate-limited. They use the same paths as the KnightBot extras and win over them:
+`GET /v1/lyrics?query=` (or `title=&artist=`, `synced=true`; LRCLIB, lyrics.ovh backup), `/v1/fun/joke`, `/v1/fun/meme`, `/v1/fun/roast`, `/v1/fun/insult`, `/v1/fun/compliment`, `/v1/fun/flirt` (add `name=`), and PNG cards `/v1/cards/rank`, `/quote`, `/wanted`, `/jail` (all take `pic=` for a profile photo URL). Lines and cards are generated locally; lyrics, jokes and memes come from free keyless public APIs, so they need internet but no API key.
+
 ### KnightBot extras
-The endpoints under *More* are served through the [KnightBot API](https://knightbotapi.stream). The default key `knight` is shared by every user of that service (30 requests/min, 200/hour, 3000/day in total), so you will see `429` often. Set your own `KNIGHT_API_KEY` in Render for real traffic. Not included on purpose: Spotify track ripping and NSFW tools.
+The remaining endpoints under *More* (screenshot, remove background, YouTube card, tweet and comment mock-ups, YouTube search/play) are served through the [KnightBot API](https://knightbotapi.stream). The default key `knight` is shared by every user of that service (30 requests/min, 200/hour, 3000/day in total), so you will see `429` often. Set your own `KNIGHT_API_KEY` in Render for real traffic. Not included on purpose: Spotify track ripping and NSFW tools.
 
 ## What works without any keys
 Everything except text AI works out of the box. AI endpoints fall back automatically: text -> Pollinations (keyless, but only 1 request / 45 s per IP), images -> Pollinations Flux, speech -> Microsoft Edge neural voices (any voice name, e.g. `hu-HU-NoemiNeural`), moderation -> the text model.
