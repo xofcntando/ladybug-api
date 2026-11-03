@@ -37,6 +37,7 @@ YouTube links go through the [KnightBot API](https://knightbotapi.stream) first 
 - **Client rotation:** on a bot check, 403/429, stale page or empty format list, yt-dlp retries with other player clients (`web_embedded`, `tv_simply`, `visionos`, `web_safari`/`mweb`, `android_vr`, ...) with a growing pause, rotating proxies if `YT_PROXY` has several (comma separated).
 - **Search never depends on one service:** yt-dlp -> YouTube results page -> KnightBot. `/v1/yt/search`, `/v1/yt/play` and the `/api/...` routes all use it.
 - **`/v1/media/info` always answers:** if yt-dlp is blocked it returns title, channel and thumbnail from YouTube oEmbed (`"partial": true`).
+- **Hosted fallback that works from Render:** set `VDA_API_KEY` ([video-download-api.com](https://video-download-api.com/api/docs), about $0.0002 per MP3/MP4, test credit for new accounts). It has its own proxy pool, so it is not bot-checked.
 - **Extra knobs:** `YT_PO_TOKEN` (manual PO token), `YT_POT_PROVIDER_URL` (a bgutil PO-token server), `COBALT_API_URL` / `COBALT_API_KEY` (your own [Cobalt](https://github.com/imputnet/cobalt) instance).
 - **Cookies:** export them from a *private/incognito* window (open youtube.com/robots.txt, export, close the window) so YouTube does not rotate them; use a throwaway account. The real fix on Render is `YT_COOKIES` or a residential `YT_PROXY`, since Render's IP ranges are often bot-checked.
 

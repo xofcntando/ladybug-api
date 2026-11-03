@@ -262,11 +262,13 @@ def _backend_order(url: str) -> list[str]:
     if not knight.is_youtube(url):
         return ["ytdlp"]
     strong = bool(_cookies_text() or _proxies() or config.YT_PO_TOKEN or config.YT_POT_PROVIDER_URL)
-    order = ["ytdlp", "cobalt", "knight"] if strong else ["knight", "cobalt", "ytdlp"]
+    order = ["ytdlp", "vda", "cobalt", "knight"] if strong else ["vda", "knight", "cobalt", "ytdlp"]
     if not ytfallback.cobalt_enabled():
         order.remove("cobalt")
+    if not ytfallback.vda_enabled():
+        order.remove("vda")
     if knight.BACKEND == "ytdlp":
-        order = [b for b in order if b == "ytdlp" or b == "cobalt"]
+        order = [b for b in order if b != "knight"]
     now = time.monotonic()
     return sorted(order, key=lambda b: _health.get(b, 0) > now)  # stable: healthy first, original order kept
 
@@ -294,6 +296,8 @@ async def _run(url: str, kind: str, quality: int, stream: bool):
                     if not knight.enabled(url):
                         continue
                     info, path, _ = await knight.fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
+                elif backend == "vda":
+                    info, path, _ = await ytfallback.vda_fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
                 elif backend == "cobalt":
                     info, path, _ = await ytfallback.cobalt_fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
                 else:
@@ -384,7 +388,7 @@ async def status():
                                                            "custom_key": knight.KEY != "knight", "last_error": knight.last_error},
             "js_runtime": list(_JS), "yt_dlp_version": ytdlp_update.version(),
             "proxies": len(_proxies()), "po_token_set": bool(config.YT_PO_TOKEN), "pot_provider_set": bool(config.YT_POT_PROVIDER_URL),
-            "cobalt_set": ytfallback.cobalt_enabled(),
+            "cobalt_set": ytfallback.cobalt_enabled(), "vda_set": ytfallback.vda_enabled(),
             "backend_order": _backend_order("https://www.youtube.com/watch?v=x"),
             "backend_down_for_s": {k: int(v - time.monotonic()) for k, v in _health.items() if v > time.monotonic()}}
 

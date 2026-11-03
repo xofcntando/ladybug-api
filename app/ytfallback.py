@@ -118,3 +118,66 @@ async def cobalt_fetch(url: str, kind: str, quality: int, max_minutes: int):
         info = {"title": (d.get("filename") or "media").rsplit(".", 1)[0], "uploader": None, "duration": None,
                 "thumbnail": None, "webpage_url": url, "view_count": None}
     return info, dest, ext
+
+
+# ---- video-download-api.com (optional, paid per request: ~$0.0002 per MP3 / MP4). Set VDA_API_KEY. ------------------
+# This is the engine behind many "free ytmp3" sites, with its own proxy pool, so it works from Render's IP.
+# Docs: https://video-download-api.com/api/docs  (new accounts get a one-time test credit of ~25 requests).
+VDA_KEY = os.getenv("VDA_API_KEY", "")
+VDA_BASE = os.getenv("VDA_API_BASE", "https://p.savenow.to").rstrip("/")
+VDA_VIDEO_Q = [144, 240, 360, 480, 720, 1080]
+
+
+def vda_enabled() -> bool:
+    return bool(VDA_KEY)
+
+
+async def vda_fetch(url: str, kind: str, quality: int, max_minutes: int):
+    """Same return shape as knight.fetch: (info, Path, ext). Submit job -> poll progress until 1000 -> download."""
+    from .music import _fetch
+    fmt = "mp3" if kind == "audio" else str(min(VDA_VIDEO_Q, key=lambda x: (x < quality, abs(x - quality))))
+    ext = "mp3" if kind == "audio" else "mp4"
+    c = client()
+    try:
+        r = await c.get(VDA_BASE + "/ajax/download.php", timeout=30, headers={"User-Agent": UA},
+                        params={"url": url, "format": fmt, "apikey": VDA_KEY, "add_info": 1, "allow_extended_duration": 0})
+        d = r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        raise HTTPException(502, f"VDA unreachable ({type(e).__name__})")
+    if r.status_code in (401, 402, 403):  # bad key / no balance: tell the owner, not the end user
+        raise HTTPException(502, f"VDA: {d.get('error_code') or d.get('message') or r.status_code}")
+    jid = d.get("id")
+    if r.status_code >= 400 or not jid:
+        raise HTTPException(502, f"VDA could not start the job: {d.get('message') or d.get('error_code') or r.status_code}")
+    info = d.get("info") or {}
+    link = None
+    deadline = asyncio.get_event_loop().time() + 150
+    while asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(2)
+        try:
+            pr = await c.get(VDA_BASE + "/ajax/progress.php", params={"id": jid}, timeout=20, headers={"User-Agent": UA})
+            p = pr.json()
+        except (httpx.HTTPError, ValueError):
+            continue
+        if pr.status_code >= 400:
+            continue
+        if int(p.get("progress") or 0) >= 1000:
+            if p.get("success") in (1, True, "1") and p.get("download_url"):
+                link = p["download_url"]
+                break
+            raise HTTPException(502, "VDA: " + str(p.get("text") or p.get("message") or "job failed"))
+    if not link:
+        raise HTTPException(504, "VDA: job timed out")
+    work = Path(tempfile.mkdtemp(prefix="lb_vda_"))
+    dest = work / f"media.{ext}"
+    try:
+        await asyncio.wait_for(_fetch(link, dest, ext), timeout=240)
+    except BaseException:
+        shutil.rmtree(work, ignore_errors=True)
+        raise
+    try:
+        meta = await oembed(url)
+    except Exception:  # noqa: BLE001
+        meta = {"title": info.get("title") or "media", "uploader": None, "duration": None,
+                "thumbnail": info.get("image") or info.get("thumbnail"), "webpage_url": url, "view_count": None}
+    return meta, dest, ext
