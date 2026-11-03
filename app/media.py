@@ -1,6 +1,7 @@
 """Media downloader (ytmp3 / ytmp4 / TikTok / Instagram / ...) built on yt-dlp.
 Only an allowlist of hosts is accepted so the endpoint cannot be used to probe internal networks."""
 import asyncio
+import json
 import re
 import shutil
 import tempfile
@@ -16,7 +17,7 @@ from starlette.background import BackgroundTask
 
 from . import config, knight
 from .security import assert_public_url
-from .storage import save_path
+from .storage import meta_path, save_path
 
 router = APIRouter(prefix="/v1/media", tags=["media"])
 _sem = asyncio.Semaphore(2)  # protect small instances
@@ -153,10 +154,35 @@ def _brief(i: dict) -> dict:
             "thumbnail": i.get("thumbnail"), "webpage_url": i.get("webpage_url"), "view_count": i.get("view_count")}
 
 
+_reuse: dict[tuple, tuple[dict, dict]] = {}  # (url, kind, quality) -> (info, stored file meta)
+
+
+def _reusable(key):
+    hit = _reuse.get(key)
+    if not hit:
+        return None
+    mp, bp = meta_path(hit[1]["id"])
+    try:
+        if mp.exists() and bp.exists() and json.loads(mp.read_text()).get("expires_at", 0) > time.time() + 120:
+            return hit
+    except Exception:  # noqa: BLE001
+        pass
+    _reuse.pop(key, None)
+    return None
+
+
 async def _run(url: str, kind: str, quality: int, stream: bool):
     await _check_url(url)
+    url = knight.canonical(url)
+    key = (url, kind, quality if kind == "video" else 0)
+    if (hit := _reusable(key)):  # same video asked again: serve the stored file, no upstream request
+        info, f = hit
+        if stream:
+            return FileResponse(meta_path(f["id"])[1], media_type=f["content_type"], filename=f["filename"])
+        return {"success": True, "type": kind, **_brief(info), "file": f, "expires_in_minutes": config.MEDIA_TTL_MINUTES, "cached": True}
     async with _sem:
         info = path = None
+        knight.last_error = None
         if knight.enabled(url):  # YouTube: KnightBot API first (no cloud-IP bot checks), yt-dlp as fallback
             try:
                 info, path, _ = await knight.fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
@@ -173,7 +199,11 @@ async def _run(url: str, kind: str, quality: int, stream: bool):
             except asyncio.TimeoutError:
                 raise HTTPException(504, "Download timed out")
             except Exception as e:
-                raise _err(e)
+                he = _err(e)
+                if knight.last_error and "bot check" in str(he.detail):
+                    he = HTTPException(502, f"YouTube blocks this server, and the KnightBot backup failed ({knight.last_error}). "
+                                            "Fix: set your own KNIGHT_API_KEY, or YT_PROXY / YT_COOKIES, in Render.")
+                raise he
     ext = path.suffix.lstrip(".")
     name = re.sub(r'[\\/:*?"<>|]+', "", info.get("title") or "media")[:80].strip() or "media"
     ctype = "audio/mpeg" if kind == "audio" else "video/mp4"
@@ -183,6 +213,9 @@ async def _run(url: str, kind: str, quality: int, stream: bool):
                             background=BackgroundTask(shutil.rmtree, work_dir, ignore_errors=True))
     f = save_path(path, f"{name}.{ext}", ctype, config.MEDIA_TTL_MINUTES)
     shutil.rmtree(work_dir, ignore_errors=True)
+    if len(_reuse) > 200:
+        _reuse.clear()
+    _reuse[key] = (info, f)
     return {"success": True, "type": kind, **_brief(info), "file": f, "expires_in_minutes": config.MEDIA_TTL_MINUTES}
 
 
