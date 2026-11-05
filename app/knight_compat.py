@@ -92,12 +92,7 @@ async def search(q: str, n: int = 5) -> list[dict]:
             return res
     except Exception:  # noqa: BLE001
         pass
-    from .knight_api import call  # last resort: KnightBot search
-    try:
-        _, _, d = await call("/api/download/ytsearch", {"query": q})
-    except HTTPException:
-        return []
-    return ((d or {}).get("result") or {}).get("results", [])[:n]
+    return []
 
 
 async def _resolve(url: str | None, query: str | None, tries: int = 3) -> list[str]:

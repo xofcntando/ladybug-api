@@ -1,6 +1,6 @@
 """YouTube download via the KnightBot API (https://knightbotapi.stream). Used by /v1/media for YouTube links.
 It returns a direct CDN link, which we fetch and store like any other media file, so the response shape does not change.
-Env: KNIGHT_API_KEY (default "knight"), KNIGHT_API_BASE, YT_BACKEND = knight (default, yt-dlp as fallback) | ytdlp (yt-dlp only)."""
+Env: KNIGHT_API_KEY, KNIGHT_API_BASE, YT_BACKEND = ytdlp (default: self-hosted only) | knight (allow KnightBot as a last resort)."""
 import asyncio
 import os
 import shutil
@@ -16,7 +16,7 @@ from .music import _fetch
 
 BASE = os.getenv("KNIGHT_API_BASE", "https://knightbotapi.stream").rstrip("/")
 KEY = os.getenv("KNIGHT_API_KEY", "knight")
-BACKEND = os.getenv("YT_BACKEND", "knight").strip().lower()
+BACKEND = os.getenv("YT_BACKEND", "ytdlp").strip().lower()
 VIDEO_Q = [144, 240, 360, 480, 720, 1080]
 
 # The default public key is shared by everyone who uses KnightBot: 30 requests/min,
