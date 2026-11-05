@@ -59,3 +59,11 @@ services:
         sync: false
       - key: YTDLP_AUTOUPDATE    # 1 (default) = install the newest yt-dlp nightly at every start; 0 = use requirements.txt only
         value: "1"
+      - key: KNIGHT_API_KEY      # optional: your own KnightBot key; the shared default allows only 3000/day for everyone
+        sync: false
+      - key: KNIGHT_DAILY_LIMIT  # our own cap on last-resort KnightBot calls per 24h (shared key limit is 3000)
+        value: "3000"
+      - key: KNIGHT_HOURLY_LIMIT
+        value: "190"
+      - key: KNIGHT_MINUTE_LIMIT
+        value: "25"

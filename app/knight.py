@@ -19,11 +19,20 @@ KEY = os.getenv("KNIGHT_API_KEY", "knight")
 BACKEND = os.getenv("YT_BACKEND", "knight").strip().lower()
 VIDEO_Q = [144, 240, 360, 480, 720, 1080]
 
+# The default public key is shared by everyone who uses KnightBot: 30 requests/min,
+# 200/hour and 3000/day in total. We keep our own counters so a busy day never
+# silently drains that shared quota. Self-hosted engines are tried first (see
+# media._backend_order); these numbers only gate the last-resort KnightBot call.
+MINUTE_LIMIT = int(os.getenv("KNIGHT_MINUTE_LIMIT", "25"))
+HOURLY_LIMIT = int(os.getenv("KNIGHT_HOURLY_LIMIT", "190"))
+DAILY_LIMIT = int(os.getenv("KNIGHT_DAILY_LIMIT", "3000"))
+
 
 import re
 import time
 
-_calls: list[float] = []
+_calls: list[float] = []      # last hour
+_day_calls: list[float] = []  # last 24 hours
 _blocked_until = 0.0
 last_error: str | None = None
 
@@ -35,17 +44,40 @@ def canonical(url: str) -> str:
 
 
 def _can_call() -> bool:
-    """Stay under the shared key's 30/min and 200/hour, and back off after an upstream 429."""
+    """Stay under the shared key's per-minute / hourly / daily limits, and back off after an upstream 429."""
     global last_error
     now = time.time()
     if now < _blocked_until:
-        last_error = "KnightBot is rate-limited right now (the shared key allows 200/hour for everyone)"
+        last_error = "KnightBot is rate-limited right now (the shared key allows 3000/day for everyone)"
         return False
     _calls[:] = [t for t in _calls if now - t < 3600]
-    ok = len(_calls) < 190 and sum(1 for t in _calls if now - t < 60) < 25
-    if not ok:
+    _day_calls[:] = [t for t in _day_calls if now - t < 86400]
+    if len(_day_calls) >= DAILY_LIMIT:
+        last_error = f"KnightBot daily budget used up ({DAILY_LIMIT}/day); self-hosted yt-dlp is used instead"
+        return False
+    if len(_calls) >= HOURLY_LIMIT or sum(1 for t in _calls if now - t < 60) >= MINUTE_LIMIT:
         last_error = "KnightBot call budget used up for now"
-    return ok
+        return False
+    return True
+
+
+def note_call() -> None:
+    """Record one upstream KnightBot request against the minute / hour / day budgets."""
+    t = time.time()
+    _calls.append(t)
+    _day_calls.append(t)
+
+
+def budget() -> dict:
+    """Current usage of the shared KnightBot quota (safe to expose: no secrets)."""
+    now = time.time()
+    minute = sum(1 for t in _calls if now - t < 60)
+    hour = sum(1 for t in _calls if now - t < 3600)
+    day = sum(1 for t in _day_calls if now - t < 86400)
+    return {"minute": minute, "minute_limit": MINUTE_LIMIT,
+            "hour": hour, "hour_limit": HOURLY_LIMIT,
+            "day": day, "day_limit": DAILY_LIMIT,
+            "remaining_today": max(0, DAILY_LIMIT - day)}
 
 
 def is_youtube(url: str) -> bool:
@@ -65,7 +97,7 @@ async def fetch(url: str, kind: str, quality: int, max_minutes: int):
         q = min(VIDEO_Q, key=lambda x: (x < quality, abs(x - quality)))  # nearest at or below, else the lowest above
         path, fmt, ext = "/api/download/ytmp4", f"{q}p", "mp4"
     global _blocked_until, last_error
-    _calls.append(time.time())
+    note_call()
     try:
         r = await client().get(BASE + path, params={"apikey": KEY, "format": fmt, "url": url}, timeout=60,
                                headers={"User-Agent": "LadybugAPI/1.2"})

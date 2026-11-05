@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 
 from .http import client
-from .knight import BASE, KEY
+from .knight import BASE, KEY, _can_call, note_call
 from .security import assert_public_url
 
 router = APIRouter(tags=["knight"])
@@ -35,6 +35,9 @@ async def call(path: str, params: dict):
     """GET the KnightBot API. Returns (bytes, content_type, parsed_json_or_None)."""
     if not KEY:
         raise HTTPException(503, "KNIGHT_API_KEY is not set")
+    if not _can_call():
+        from .knight import last_error as _le
+        raise HTTPException(429, _le or "KnightBot daily budget used up; use the self-hosted endpoints instead")
     for k, v in params.items():
         if k in URL_PARAMS and v:
             await assert_public_url(v)
@@ -42,6 +45,7 @@ async def call(path: str, params: dict):
         r = await client().get(BASE + path, params={**params, "apikey": KEY}, headers=UA, timeout=60)
     except httpx.HTTPError as e:
         raise HTTPException(504, f"KnightBot unreachable ({type(e).__name__})")
+    note_call()
     if r.status_code == 429:
         raise HTTPException(429, "KnightBot rate limit reached (the default key is shared). Retry in a minute or set your own KNIGHT_API_KEY")
     ct = r.headers.get("content-type", "").split(";")[0]
