@@ -6,6 +6,7 @@ import re
 import shutil
 import tempfile
 import time
+import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -143,10 +144,41 @@ def _opts(tmp: Path, extra: dict, proxy: str | None = None) -> dict:
     return o
 
 
-def _err(e: Exception) -> HTTPException:
+def _playability(url: str) -> str | None:
+    """Ask the watch page for its playabilityStatus, e.g. 'LOGIN_REQUIRED' or 'OK'.
+
+    YouTube uses the same "Sign in to confirm you're not a bot" text for two very different
+    problems: a datacenter IP being rate-limited (retrying or rotating clients helps) and a video
+    that is age-restricted / login-gated (nothing helps without cookies). This probe tells them
+    apart so the error we return is actionable instead of "retry later" when retrying is useless.
+    """
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        with urllib.request.urlopen(req, timeout=12) as r:
+            body = r.read(3_000_000).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001  -- the probe is best effort
+        return None
+    m = re.search(r'"playabilityStatus":\{"status":"([A-Z_]+)"', body)
+    return m.group(1) if m else None
+
+
+def _err(e: Exception, url: str | None = None) -> HTTPException:
     msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e))
     low = msg.lower()
     if "sign in to confirm" in low or "not a bot" in low or "confirm you" in low:
+        # Same wording for "your IP is throttled" and "this video needs an account": probe to tell them apart.
+        status = _playability(url) if url else None
+        if status in ("LOGIN_REQUIRED", "AGE_VERIFICATION_REQUIRED", "AGE_CHECK_REQUIRED"):
+            return HTTPException(403, "This video is age-restricted or only playable while signed in, so YouTube "
+                                      "refuses anonymous downloads of it. Retrying will not help: set YT_COOKIES "
+                                      "(a cookies.txt exported from a signed-in private window) to download it.")
+        if status in ("UNPLAYABLE", "ERROR"):
+            return HTTPException(403, "YouTube marks this video as unplayable (removed, blocked in this region, "
+                                      "or members-only).")
         return HTTPException(502, "YouTube blocked this server (bot check) on every method. Set YT_COOKIES (from a private window) or YT_PROXY in Render, or retry later.")
     if "private video" in low or "log in" in low or "login required" in low or "age-restricted" in low or "confirm your age" in low:
         return HTTPException(403, "Video is private, age-restricted or needs login")
@@ -174,11 +206,15 @@ def _is_block(e: Exception) -> bool:
     return not any(p in m for p in _PERMANENT)
 
 
-def _with_clients(fn, attempts: int | None = None):
+def _with_clients(fn, attempts: int | None = None, url: str | None = None):
     """Run fn(extra_opts, proxy); on a block retry with other player clients, rotating proxies when several are set.
 
     `attempts` caps the chain. The search-by-name path passes a small number so a blocked video
     fails over to the next search result quickly instead of walking all six clients first.
+
+    A "sign in to confirm" error is ambiguous, so it is probed once: if the video is actually
+    age-restricted / login-gated, no other client can succeed and we stop instead of burning
+    the remaining attempts (that turned a 4s failure into a 24s one).
     """
     last = None
     ps = _proxies()
@@ -192,6 +228,10 @@ def _with_clients(fn, attempts: int | None = None):
             last = e
             if not _is_block(e):
                 raise
+            low = str(e).lower()
+            if url and n == 0 and ("sign in to confirm" in low or "not a bot" in low):
+                if _playability(url) in ("LOGIN_REQUIRED", "AGE_VERIFICATION_REQUIRED", "AGE_CHECK_REQUIRED"):
+                    raise  # permanent: needs cookies, not another client
             time.sleep(min(1.5 * n, 4))  # small, growing pause: hammering YouTube makes the block stick
     raise last
 
@@ -222,12 +262,12 @@ def _info(url: str) -> dict:
         with tempfile.TemporaryDirectory() as d:
             with yt_dlp.YoutubeDL(_opts(Path(d), {"skip_download": True, **extra}, proxy)) as y:
                 return y.extract_info(url, download=False)
-    return _with_clients(go)
+    return _with_clients(go, url=url)
 
 
 def _download(url: str, kind: str, quality: int, kbps: int | None = None,
               attempts: int | None = None) -> tuple[dict, Path]:
-    return _with_clients(lambda extra, proxy: _download_once(url, kind, quality, extra, proxy, kbps), attempts)
+    return _with_clients(lambda extra, proxy: _download_once(url, kind, quality, extra, proxy, kbps), attempts, url)
 
 
 def _download_once(url: str, kind: str, quality: int, client_opts: dict, proxy: str | None = None,
@@ -363,7 +403,7 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
                     raise HTTPException(504, "Download timed out")
                 errors.append(f"{backend}: timed out")
             except Exception as e:  # noqa: BLE001
-                he = _err(e)
+                he = _err(e, url)
                 if he.status_code in (400, 403) or len(order) == 1:  # private / unsupported / the only engine: say so plainly
                     raise he
                 _note(backend, False)
@@ -426,7 +466,7 @@ async def info(url: str):
                             "partial_reason": "YouTube bot-check on this server; metadata came from oEmbed/search"}
             if isinstance(e, asyncio.TimeoutError):
                 raise HTTPException(504, "Timed out fetching video info")
-            raise e if isinstance(e, HTTPException) else _err(e)
+            raise e if isinstance(e, HTTPException) else _err(e, url)
         if len(_info_cache) > 100:
             _info_cache.clear()
         _info_cache[url] = (time.monotonic() + 600, i)
