@@ -1,9 +1,8 @@
 """Extra tools served through the KnightBot API (https://knightbotapi.stream): the ones Ladybug does not already do itself.
-Lyrics, website screenshots, background removal, rank / quote / wanted / jail / YouTube cards, fake tweet and YouTube
-comment images, jokes and other fun text, and YouTube search / play-by-name.
+Lyrics, website screenshots, background removal, rank / quote / wanted / jail cards, fake tweet images, jokes and other
+fun text. YouTube search, play and cards are self-hosted (see app/youtube.py and app/own.py) and no longer use this API.
 Env: KNIGHT_API_KEY (default "knight" is a shared public key: 30 requests/min, 200/hour, 3000/day for everyone using it,
 so set your own for real traffic), KNIGHT_API_BASE."""
-import re
 from typing import Literal
 
 import httpx
@@ -11,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 
 from .http import client
-from .knight import BASE, KEY
+from .knight import BASE, KEY, _can_call, note_call
 from .security import assert_public_url
 
 router = APIRouter(tags=["knight"])
@@ -35,6 +34,9 @@ async def call(path: str, params: dict):
     """GET the KnightBot API. Returns (bytes, content_type, parsed_json_or_None)."""
     if not KEY:
         raise HTTPException(503, "KNIGHT_API_KEY is not set")
+    if not _can_call():
+        from .knight import last_error as _le
+        raise HTTPException(429, _le or "KnightBot daily budget used up; use the self-hosted endpoints instead")
     for k, v in params.items():
         if k in URL_PARAMS and v:
             await assert_public_url(v)
@@ -42,6 +44,7 @@ async def call(path: str, params: dict):
         r = await client().get(BASE + path, params={**params, "apikey": KEY}, headers=UA, timeout=60)
     except httpx.HTTPError as e:
         raise HTTPException(504, f"KnightBot unreachable ({type(e).__name__})")
+    note_call()
     if r.status_code == 429:
         raise HTTPException(429, "KnightBot rate limit reached (the default key is shared). Retry in a minute or set your own KNIGHT_API_KEY")
     ct = r.headers.get("content-type", "").split(";")[0]
@@ -132,22 +135,3 @@ async def fun(kind: Literal["joke", "meme", "roast", "insult", "compliment", "fl
     """Random joke, meme (image link), roast, insult, compliment or flirt line."""
     _, _, d = await call(f"/api/fun/{kind}", {})
     return _result(d)
-
-
-@router.get("/v1/yt/search")
-async def yt_search(query: str = Query(..., min_length=2, max_length=150), limit: int = Query(5, ge=1, le=10)):
-    """Search YouTube by name. Returns titles, links, thumbnails, durations. Feed a link to /v1/media/ytmp3 or use /v1/yt/play."""
-    from .knight_compat import search  # yt-dlp -> YouTube results page -> KnightBot, so a block or rate limit never kills search
-    return {"query": query, "results": (await search(query, limit))[:limit]}
-
-
-@router.get("/v1/yt/play")
-async def yt_play(query: str = Query(..., min_length=2, max_length=150), type: Literal["audio", "video"] = "audio",
-                  quality: int = Query(480, ge=144, le=1080), stream: bool = False):
-    """Search YouTube by name and download the first match as MP3 or MP4 (same response as /v1/media/ytmp3)."""
-    from .media import _run
-    from .knight_compat import search
-    hits = await search(query, 1)
-    if not hits or not re.match(r"https?://(www\.)?(youtube\.com|youtu\.be)/", hits[0].get("url", "")):
-        raise HTTPException(404, "No video found")
-    return await _run(hits[0]["url"], type, quality, stream)

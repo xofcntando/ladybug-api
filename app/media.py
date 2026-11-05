@@ -286,8 +286,11 @@ def _note(backend: str, ok: bool) -> None:
 def _backend_order(url: str) -> list[str]:
     if not knight.is_youtube(url):
         return ["ytdlp"]
-    strong = bool(_cookies_text() or _proxies() or config.YT_PO_TOKEN or config.YT_POT_PROVIDER_URL)
-    order = ["ytdlp", "vda", "cobalt", "knight"] if strong else ["vda", "knight", "cobalt", "ytdlp"]
+    # Self-hosted engines first, always. yt-dlp runs on our own host (with the local PO-token
+    # provider / cookies / proxy when configured), then an own Cobalt instance, then a paid
+    # VDA key. KnightBot's default key is shared by every user of that service (3000/day in
+    # total), so it is the *last* resort and never used while a self-hosted path can work.
+    order = ["ytdlp", "cobalt", "vda", "knight"]
     if not ytfallback.cobalt_enabled():
         order.remove("cobalt")
     if not ytfallback.vda_enabled():
@@ -423,7 +426,8 @@ async def status():
     return {"cookies": {"set": bool(ck), "cookie_lines": len(lines), "youtube_google_lines": len(yt),
                         "has_login_cookies": bool(names & need), "missing_login_cookies": sorted(need - names) if ck else None},
             "proxy_set": bool(config.YT_PROXY), "knight": {"enabled": knight.BACKEND != "ytdlp" and bool(knight.KEY),
-                                                           "custom_key": knight.KEY != "knight", "last_error": knight.last_error},
+                                                           "custom_key": knight.KEY != "knight", "last_error": knight.last_error,
+                                                           "budget": knight.budget()},
             "js_runtime": list(_JS), "yt_dlp_version": ytdlp_update.version(),
             "proxies": len(_proxies()), "po_token_set": bool(config.YT_PO_TOKEN), "pot_provider_set": bool(config.YT_POT_PROVIDER_URL),
             "cobalt_set": ytfallback.cobalt_enabled(),

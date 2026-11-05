@@ -370,3 +370,167 @@ async def card_jail(name: str = Query("Unknown", max_length=40), pic: str | None
     """Black-and-white mugshot behind cell bars with a name plate (700x930 PNG)."""
     av = await _opt(pic)
     return _img(await asyncio.to_thread(_jail, name, av, crime, sentence, cell))
+
+
+# ---------------------------------------------------- 11-12. YouTube mock-ups
+# Drawn locally with Pillow so these two YouTube endpoints no longer spend the
+# shared KnightBot quota (3000/day for everyone using the public key).
+def _round_thumb(im: Image.Image, size: tuple[int, int], radius: int = 0) -> Image.Image:
+    im = ImageOps.fit(im.convert("RGB"), size, Image.LANCZOS)
+    mask = Image.new("L", size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, size[0] - 1, size[1] - 1), radius=radius, fill=255)
+    out = Image.new("RGBA", size, (0, 0, 0, 0))
+    out.paste(im, (0, 0), mask)
+    return out
+
+
+def _play_button(d: ImageDraw.ImageDraw, cx: int, cy: int, w: int = 96, h: int = 66):
+    d.rounded_rectangle((cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2), radius=16, fill=(230, 33, 23, 240))
+    t = h * 0.42
+    d.polygon([(cx - t * 0.55, cy - t * 0.8), (cx - t * 0.55, cy + t * 0.8), (cx + t * 0.9, cy)], fill=(255, 255, 255, 255))
+
+
+def _fmt_views(n) -> str | None:
+    if not isinstance(n, (int, float)) or n <= 0:
+        return None
+    n = int(n)
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.1f}B views"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M views"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K views"
+    return f"{n} views"
+
+
+def _fmt_dur(sec) -> str | None:
+    if not isinstance(sec, (int, float)) or sec <= 0:
+        return None
+    sec = int(sec)
+    return f"{sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}" if sec >= 3600 else f"{sec // 60}:{sec % 60:02d}"
+
+
+def _ytcard(meta: dict, thumb_bytes: bytes | None, theme: str) -> bytes:
+    W, TH, H = 1024, 576, 780
+    dark = theme == "dark"
+    bg = (15, 15, 15) if dark else (255, 255, 255)
+    ink = (255, 255, 255) if dark else (15, 15, 15)
+    soft = (170, 170, 170) if dark else (96, 96, 96)
+    img = Image.new("RGB", (W, H), bg)
+    if thumb_bytes:
+        try:
+            th = _round_thumb(Image.open(io.BytesIO(thumb_bytes)), (W, TH))
+            img.paste(th, (0, 0), th)
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        ImageDraw.Draw(img).rectangle((0, 0, W, TH), fill=(40, 40, 40) if dark else (225, 225, 225))
+    # bottom shade so the duration badge stays readable on bright thumbnails
+    grad = Image.linear_gradient("L").resize((W, 180)).transpose(Image.FLIP_TOP_BOTTOM)
+    shade = Image.new("RGBA", (W, 180), (0, 0, 0, 255))
+    shade.putalpha(grad)
+    img.paste(shade, (0, TH - 180), shade)
+    d = ImageDraw.Draw(img, "RGBA")
+    _play_button(d, W // 2, TH // 2)
+    dur = _fmt_dur(meta.get("duration"))
+    if dur:
+        f = _font(26, "Bold")
+        tw = d.textlength(dur, font=f)
+        d.rounded_rectangle((W - 28 - tw - 28, TH - 28 - 44, W - 28, TH - 28), radius=8, fill=(0, 0, 0, 200))
+        d.text((W - 28 - 14, TH - 28 - 22), dur, font=f, fill="white", anchor="rm")
+    title = meta.get("title") or "YouTube video"
+    lines, f = _wrap(d, title, _font, 36, "Bold", W - 48, 2)
+    y = TH + 26
+    for ln in lines:
+        d.text((24, y), ln, font=f, fill=ink)
+        y += int(f.size * 1.28)
+    ch = meta.get("uploader") or meta.get("author_name") or "YouTube"
+    d.text((24, y + 8), ch, font=_font(26, "SemiBold"), fill=soft)
+    views = _fmt_views(meta.get("view_count"))
+    if views:
+        d.text((24, y + 48), views, font=_font(24, "Medium"), fill=soft)
+    return _png(img)
+
+
+def _thumb_icon(img: Image.Image, x: float, y: float, s: float, color, up: bool = True) -> None:
+    layer = Image.new("RGBA", (int(s), int(s)), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    d.rounded_rectangle((0, s * 0.38, s * 0.62, s), radius=s * 0.12, fill=color)
+    d.rounded_rectangle((s * 0.12, s * 0.02, s * 0.5, s * 0.5), radius=s * 0.1, fill=color)
+    d.rectangle((s * 0.62, s * 0.5, s * 0.84, s), fill=color)
+    if not up:
+        layer = layer.rotate(180)
+    img.paste(layer, (int(x), int(y)), layer)
+
+
+def _ytcomment(name: str, text: str, av: bytes | None, likes: str, when: str, theme: str) -> bytes:
+    dark = theme == "dark"
+    bg = (15, 15, 15) if dark else (255, 255, 255)
+    ink = (255, 255, 255) if dark else (15, 15, 15)
+    soft = (170, 170, 170) if dark else (96, 96, 96)
+    W, pad, av_s = 1000, 28, 76
+    tx = pad + av_s + 20
+    tw = W - tx - pad
+    tmp = Image.new("RGB", (10, 10))
+    lines, f = _wrap(ImageDraw.Draw(tmp), text, _font, 27, "Regular", tw, 14)
+    text_h = len(lines) * int(f.size * 1.35)
+    H = 24 + 40 + 12 + text_h + 24 + 34 + 24
+    img = Image.new("RGB", (W, H), bg)
+    d = ImageDraw.Draw(img)
+    a = _avatar(av, av_s, name, (230, 33, 23))
+    img.paste(a, (pad, 24), a)
+    nf = _font(26, "Bold")
+    d.text((tx, 26), name, font=nf, fill=ink)
+    nw = d.textlength(name, font=nf)
+    d.text((tx + nw + 12, 33), when, font=_font(21, "Regular"), fill=soft)
+    y = 24 + 40 + 8
+    for ln in lines:
+        d.text((tx, y), ln, font=f, fill=ink)
+        y += int(f.size * 1.35)
+    ay = y + 16
+    lf = _font(22, "SemiBold")
+    _thumb_icon(img, tx, ay, 26, soft, True)
+    d.text((tx + 34, ay + 1), likes, font=lf, fill=soft)
+    x2 = tx + 34 + int(d.textlength(likes, font=lf)) + 34
+    _thumb_icon(img, x2, ay, 26, soft, False)
+    d.text((x2 + 34 + 18, ay + 1), "Reply", font=_font(22, "Bold"), fill=soft)
+    return _png(img)
+
+
+@router.get("/v1/cards/ytcard", tags=["own"])
+async def card_ytcard(url: str = Query(..., description="YouTube video link"),
+                      theme: Literal["dark", "light"] = "dark"):
+    """YouTube-style video card (1024x780 PNG) drawn by Ladybug itself, no third-party API."""
+    from . import ytfallback
+    vid = ytfallback.video_id(url)
+    if not vid:
+        raise HTTPException(400, "Not a YouTube video link")
+    canon = f"https://www.youtube.com/watch?v={vid}"
+    try:
+        meta = await ytfallback.oembed(canon)
+    except HTTPException:
+        meta = {"title": "YouTube video", "uploader": None,
+                "thumbnail": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg", "duration": None, "view_count": None}
+    try:
+        from .media import _info
+        i = await asyncio.wait_for(asyncio.to_thread(_info, canon), timeout=20)
+        meta["duration"] = i.get("duration") or meta.get("duration")
+        meta["view_count"] = i.get("view_count")
+        meta["uploader"] = i.get("uploader") or meta.get("uploader")
+        if i.get("thumbnail"):
+            meta["thumbnail"] = i["thumbnail"]
+    except Exception:  # noqa: BLE001  -- metadata enrichment is optional
+        pass
+    thumb = await _opt(meta.get("thumbnail"))
+    return _img(await asyncio.to_thread(_ytcard, meta, thumb, theme))
+
+
+@router.get("/v1/fake/ytcomment", tags=["own"])
+async def fake_ytcomment(name: str = Query(..., min_length=1, max_length=60),
+                         text: str = Query(..., min_length=1, max_length=600),
+                         pic: str | None = None, likes: str = Query("1.2K", max_length=12),
+                         when: str = Query("2 hours ago", max_length=30, alias="time"),
+                         theme: Literal["dark", "light"] = "light"):
+    """YouTube comment mock-up (PNG) drawn by Ladybug itself, no third-party API. For fun/design mock-ups only."""
+    av = await _opt(pic)
+    return _img(await asyncio.to_thread(_ytcomment, name, text, av, likes, when, theme))
