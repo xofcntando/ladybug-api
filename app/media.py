@@ -478,7 +478,11 @@ async def info(url: str):
 async def status():
     """Setup check: are cookies / proxy / KnightBot configured and well-formed? Never reveals the values."""
     ck = _cookies_text()
-    lines = [l for l in ck.splitlines() if l.strip() and not l.startswith("#")]
+    # Netscape marks HttpOnly cookies with a "#HttpOnly_" prefix -- they are data, not comments,
+    # and they are exactly where SID/HSID/SSID/LOGIN_INFO/__Secure-*PSID live. Strip the marker
+    # before filtering so the diagnostic does not under-report the jar.
+    lines = [l[len("#HttpOnly_"):] if l.startswith("#HttpOnly_") else l
+             for l in ck.splitlines() if l.strip() and (not l.startswith("#") or l.startswith("#HttpOnly_"))]
     yt = [l for l in lines if "youtube.com" in l or "google.com" in l]
     names = {l.split("\t")[5] for l in yt if len(l.split("\t")) >= 7}
     need = {"SID", "HSID", "SSID", "APISID", "SAPISID", "__Secure-1PSID", "__Secure-3PSID", "LOGIN_INFO"}
