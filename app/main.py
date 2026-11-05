@@ -26,7 +26,6 @@ from .anime import router as anime_router
 from .music import router as music_router
 from .own import router as own_router
 from .youtube import router as youtube_router
-from .knight_api import router as knight_router
 from .knight_compat import router as compat_router, public as compat_public
 from .cards import router as cards_router
 from .scrape import router as scrape_router
@@ -105,9 +104,8 @@ app.include_router(media_router, dependencies=auth)
 app.include_router(ai_media_router, dependencies=auth)
 app.include_router(anime_router, dependencies=auth)
 app.include_router(music_router, dependencies=auth)
-app.include_router(own_router, dependencies=auth)  # before knight_router so these win
+app.include_router(own_router, dependencies=auth)  # self-hosted: lyrics, cards, fun, screenshot, removebg, tweet
 app.include_router(youtube_router, dependencies=auth)  # self-hosted YouTube: search / play / video / formats
-app.include_router(knight_router, dependencies=auth)
 app.include_router(compat_router)
 app.include_router(compat_public)
 app.include_router(cards_router, dependencies=auth)

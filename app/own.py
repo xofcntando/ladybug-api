@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 from .cards import _circle, _fit, _font, _letter_avatar, _opt
 from .http import client
+from .security import assert_public_url
 
 router = APIRouter(tags=["own"])
 UA = {"User-Agent": "LadybugAPI/1.2 (+https://github.com/xofcntando/ladybug-api)", "Accept": "application/json"}
@@ -87,14 +88,6 @@ async def lyrics(query: str | None = Query(None, min_length=2, max_length=150, d
                                    "instrumental": False, "lyrics": ly})
         except HTTPException:
             pass
-    try:
-        from .knight_api import call, _result
-        _, _, d = await call("/api/lyrics", {"query": query or f"{title} {artist or ''}"})
-        out = _result(d)
-        if out.get("lyrics"):
-            return _cset(key, out)
-    except HTTPException:
-        pass
     raise HTTPException(404, "No lyrics found. Try 'artist - title' or title= and artist=")
 
 
@@ -534,3 +527,56 @@ async def fake_ytcomment(name: str = Query(..., min_length=1, max_length=60),
     """YouTube comment mock-up (PNG) drawn by Ladybug itself, no third-party API. For fun/design mock-ups only."""
     av = await _opt(pic)
     return _img(await asyncio.to_thread(_ytcomment, name, text, av, likes, when, theme))
+
+
+# ------------------------------------------------------------------ 11-13. screenshot / removebg / tweet
+@router.get("/v1/screenshot", tags=["own"])
+async def screenshot(url: str = Query(..., description="Public web page to capture"),
+                     width: int = Query(1280, ge=320, le=2560),
+                     height: int = Query(800, ge=240, le=2560),
+                     full_page: bool = Query(False, description="Capture the whole scrollable page"),
+                     theme: Literal["light", "dark"] = "light",
+                     delay: float = Query(0.6, ge=0, le=5, description="Extra seconds to wait before capturing"),
+                     format: Literal["png", "jpeg"] = "png",
+                     quality: int = Query(85, ge=30, le=100, description="JPEG quality")):
+    """PNG/JPEG screenshot of any public page, rendered by our own Chromium. No third-party API."""
+    from .selfhost import screenshot as _shot
+    data, media = await _shot(url, width, height, full_page, theme, delay, format, quality)
+    return Response(data, media_type=media, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/image/removebg", tags=["own"])
+async def remove_bg(url: str = Query(..., description="Image URL"),
+                    tolerance: int = Query(32, ge=1, le=120,
+                                           description="How far from the border colour still counts as background"),
+                    feather: int = Query(2, ge=0, le=12, description="Edge softness in pixels")):
+    """Remove a flat/near-flat background and return a transparent PNG, done locally. No third-party API."""
+    from .selfhost import remove_bg as _rm
+    await assert_public_url(url)
+    try:
+        r = await client().get(url, headers=UA, timeout=30, follow_redirects=True)
+    except httpx.HTTPError as e:
+        raise HTTPException(504, f"Image host unreachable ({type(e).__name__})")
+    if r.status_code >= 400:
+        raise HTTPException(502, f"Image host returned {r.status_code}")
+    if len(r.content) > 20 * 1024 * 1024:
+        raise HTTPException(413, "Image is larger than 20 MB")
+    return _img(await asyncio.to_thread(_rm, r.content, tolerance, feather))
+
+
+@router.get("/v1/fake/tweet", tags=["own"])
+async def fake_tweet(name: str = Query(..., min_length=1, max_length=60),
+                     text: str = Query(..., min_length=1, max_length=600),
+                     username: str = Query("user", max_length=30),
+                     pic: str | None = None,
+                     verified: bool = False,
+                     likes: str = Query("1.2K", max_length=12),
+                     retweets: str = Query("248", max_length=12),
+                     replies: str = Query("96", max_length=12),
+                     when: str = Query("2 hours ago", max_length=30, alias="time"),
+                     theme: Literal["light", "dim", "dark"] = "light"):
+    """X/Twitter post mock-up (PNG) drawn by Ladybug itself, no third-party API. For fun/design mock-ups only."""
+    from .selfhost import tweet_card
+    av = await _opt(pic)
+    return _img(await asyncio.to_thread(tweet_card, name, username, text, av, verified,
+                                        likes, retweets, replies, when, theme))
