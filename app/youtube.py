@@ -15,7 +15,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 
-from . import ytfallback
+from . import config, ytfallback
 from .knight import is_youtube
 
 router = APIRouter(prefix="/v1/yt", tags=["youtube"])
@@ -170,19 +170,40 @@ async def search(query: str = Query(..., min_length=2, max_length=150),
 @router.get("/play")
 async def play(query: str = Query(..., min_length=2, max_length=150),
                type: Literal["audio", "video"] = "audio",
-               quality: int = Query(480, ge=144, le=1080),
+               quality: int = Query(config.VIDEO_QUALITY_DEFAULT, ge=144, le=1080,
+                                    description="Video height. 360p is the default: smallest and fastest."),
+               kbps: int = Query(config.AUDIO_KBPS, ge=32, le=320,
+                                 description="MP3 bitrate for type=audio. 128 is the default."),
                index: int = Query(1, ge=1, le=10, description="Which search result to download (1 = first)"),
+               tries: int = Query(3, ge=1, le=5, description="How many results to try if one fails"),
+               attempts: int = Query(2, ge=1, le=6,
+                                     description="Player-client attempts per result before moving on. "
+                                                 "Lower = faster failover between results."),
                stream: bool = False):
-    """Search YouTube by name and download the first (or Nth) match as MP3 or MP4."""
+    """Search YouTube by name and download the first (or Nth) match as a small MP3 or MP4.
+
+    Defaults are tuned for speed: 128 kbps audio and 360p video, so the file is a few MB.
+    If a result turns out to be unplayable (live, removed, blocked) the next one is tried
+    automatically instead of failing after a long wait.
+    """
     from .knight_compat import search as _search
     from .media import _run
-    hits = await _search(query, max(index, 1))
+    want = max(index, 1) + tries - 1
+    hits = await _search(query, min(want, 10))
     if not hits or len(hits) < index:
         raise HTTPException(404, "No video found")
-    url = hits[index - 1].get("url", "")
-    if not is_youtube(url):
-        raise HTTPException(404, "No playable video found")
-    return await _run(url, type, quality, stream)
+    last: HTTPException | None = None
+    for hit in hits[index - 1:index - 1 + tries]:
+        url = hit.get("url", "")
+        if not is_youtube(url):
+            continue
+        try:
+            return await _run(url, type, quality, stream, kbps, attempts)
+        except HTTPException as e:
+            if e.status_code in (400, 403, 413):  # unsupported / private / too long: no point retrying
+                raise
+            last = e
+    raise last or HTTPException(404, "No playable video found")
 
 
 @router.get("/video")
