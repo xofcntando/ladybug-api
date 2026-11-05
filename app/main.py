@@ -33,6 +33,7 @@ from .scrape import router as scrape_router
 from .devtools import router as dev_router
 from .webcheck import router as web_router
 from .security import require_key
+from .ratelimit import limit_middleware, router as account_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -74,8 +75,10 @@ async def _keep_awake(url: str):
 
 app = FastAPI(title="Ladybug API", version="1.1.0", lifespan=lifespan,
               description="Download, file and AI APIs. Send X-API-Key on every /v1 request.")
+app.middleware("http")(limit_middleware)  # per-API-key daily quota (DAILY_REQUEST_LIMIT, default 100000)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
-                   expose_headers=["Content-Disposition"])
+                   expose_headers=["Content-Disposition", "X-RateLimit-Limit", "X-RateLimit-Remaining",
+                                   "X-RateLimit-Reset", "Retry-After"])
 
 
 @app.middleware("http")
@@ -110,6 +113,7 @@ app.include_router(compat_public)
 app.include_router(cards_router, dependencies=auth)
 app.include_router(dev_router, dependencies=auth)
 app.include_router(web_router, dependencies=auth)
+app.include_router(account_router, dependencies=auth)  # /v1/account/usage
 
 
 STATIC = Path(__file__).resolve().parent.parent / "static"

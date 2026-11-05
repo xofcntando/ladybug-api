@@ -9,6 +9,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 AI_MODEL = os.getenv("AI_MODEL", "")
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
+# Our own per-API-key daily quota (not a third-party limit). 100000 requests / 24h by default.
+DAILY_REQUEST_LIMIT = int(os.getenv("DAILY_REQUEST_LIMIT", "100000"))
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "1") != "0"
+
 MEDIA_MAX_MB = int(os.getenv("MEDIA_MAX_MB", "100"))
 MEDIA_MAX_MINUTES = int(os.getenv("MEDIA_MAX_MINUTES", "20"))
 MEDIA_TTL_MINUTES = int(os.getenv("MEDIA_TTL_MINUTES", "30"))
