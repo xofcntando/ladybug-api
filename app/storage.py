@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 import time
@@ -8,6 +9,16 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from . import config
+
+
+def public_base() -> str:
+    """Public origin for absolute download links (Render sets RENDER_EXTERNAL_URL)."""
+    return (os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
+
+
+def file_url(fid: str) -> str:
+    """Absolute, self-authenticating download URL. The 128-bit id is the capability."""
+    return f"{public_base()}/v1/files/{fid}/download"
 
 
 def meta_path(fid: str):
@@ -23,7 +34,7 @@ def save(data: bytes, filename: str, content_type: str) -> dict:
     mp, bp = meta_path(fid)
     bp.write_bytes(data)
     meta = {"id": fid, "filename": filename, "content_type": content_type, "size": len(data),
-            "download_url": f"/v1/files/{fid}/download"}
+            "download_url": file_url(fid)}
     mp.write_text(json.dumps(meta))
     return meta
 
@@ -109,6 +120,6 @@ def save_path(path, filename: str, content_type: str, ttl_minutes: int) -> dict:
     size = path.stat().st_size
     shutil.move(str(path), str(bp))
     meta = {"id": fid, "filename": filename, "content_type": content_type, "size": size,
-            "download_url": f"/v1/files/{fid}/download", "expires_at": time.time() + ttl_minutes * 60}
+            "download_url": file_url(fid), "expires_at": time.time() + ttl_minutes * 60}
     mp.write_text(json.dumps(meta))
     return meta

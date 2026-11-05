@@ -161,8 +161,10 @@ async def admin_cleanup(all: bool = False):
     return await asyncio.to_thread(cleanup, all)
 
 
-@app.get("/v1/files/{fid}/download", dependencies=auth, tags=["files"])
+@app.get("/v1/files/{fid}/download", tags=["files"])
 def download_file(fid: str):
+    """Public by design: the 128-bit random id is an unguessable capability token, so download links
+    handed to a bot or browser work without shipping the API key. Listing/deleting still need auth."""
     mp, bp = _meta_path(fid)
     if not mp.exists() or not bp.exists():
         raise HTTPException(404, "Not found")
