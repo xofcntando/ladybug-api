@@ -59,6 +59,12 @@ def _search_sync(q: str, n: int) -> list[dict]:
         vid = e.get("id")
         if not vid:
             continue
+        # Skip live / upcoming / unavailable entries: they cannot be downloaded and used to make
+        # "download by name" wait for the whole retry chain and then fail.
+        if e.get("is_live") or e.get("live_status") in ("is_live", "is_upcoming", "post_live"):
+            continue
+        if e.get("availability") in ("private", "premium_only", "subscriber_only", "needs_auth"):
+            continue
         out.append({"title": e.get("title"), "url": f"https://youtube.com/watch?v={vid}",
                     "thumbnail": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
                     "duration": _fmt(e.get("duration")), "views": e.get("view_count")})
@@ -94,18 +100,21 @@ async def search(q: str, n: int = 5) -> list[dict]:
     return ((d or {}).get("result") or {}).get("results", [])[:n]
 
 
-async def _resolve(url: str | None, query: str | None) -> str:
+async def _resolve(url: str | None, query: str | None, tries: int = 3) -> list[str]:
+    """URLs to try, in order. A url= gives one; a query= gives up to `tries` search hits so a
+    blocked or removed first result falls through to the next instead of failing."""
     if url:
         if not YT_RE.match(url):
             raise HTTPException(400, "Only YouTube links are supported here")
         await _check_url(url)
-        return url
+        return [url]
     if not query or len(query) < 2:
         raise HTTPException(400, "Provide url= or query=")
-    hits = await search(query[:150], 1)
-    if not hits or not hits[0].get("url"):
+    hits = await search(query[:150], max(1, tries))
+    urls = [h["url"] for h in hits if h.get("url") and YT_RE.match(h["url"])]
+    if not urls:
         raise HTTPException(404, "No video found")
-    return hits[0]["url"]
+    return urls[:tries]
 
 
 def _q(fmt: str | None, default: int) -> int:
@@ -117,11 +126,20 @@ def _q(fmt: str | None, default: int) -> int:
     return min(max(int(m[1]), 144), 1080) if m else default
 
 
-async def _fetch(request: Request, url: str, kind: str, quality: int):
-    d = await _run(url, kind, quality, False)
-    f = d["file"]
-    link = f"{_base(request)}/dl/{f['id']}"
-    return d, f, link
+async def _fetch(request: Request, urls: list[str], kind: str, quality: int, kbps: int | None = None):
+    """Download the first URL that works, trying the next one on a non-fatal error."""
+    last: HTTPException | None = None
+    for url in urls:
+        try:
+            d = await _run(url, kind, quality, False, kbps, 2)
+        except HTTPException as e:
+            if e.status_code in (400, 403, 413):
+                raise
+            last = e
+            continue
+        f = d["file"]
+        return d, f, f"{_base(request)}/dl/{f['id']}"
+    raise last or HTTPException(404, "No playable video found")
 
 
 def _dur(d):
@@ -131,8 +149,9 @@ def _dur(d):
 @router.get("/download/ytaudio")
 async def ytaudio(request: Request, url: str | None = None, query: str | None = None, format: str = "128kbps"):
     try:
-        u = await _resolve(url, query)
-        d, f, link = await _fetch(request, u, "audio", 0)
+        us = await _resolve(url, query)
+        d, f, link = await _fetch(request, us, "audio", 0)
+        u = us[0]
     except HTTPException as e:
         return _err(e.status_code, str(e.detail))
     return {"status": 200, "success": True, "creator": CREATOR, "result": {
@@ -141,10 +160,11 @@ async def ytaudio(request: Request, url: str | None = None, query: str | None = 
 
 
 @router.get("/download/ytmp4")
-async def ytmp4_dl(request: Request, url: str | None = None, query: str | None = None, format: str = "480p"):
+async def ytmp4_dl(request: Request, url: str | None = None, query: str | None = None, format: str = "360p"):
     try:
-        u = await _resolve(url, query)
-        d, f, link = await _fetch(request, u, "video", _q(format, 480))
+        us = await _resolve(url, query)
+        d, f, link = await _fetch(request, us, "video", _q(format, config.VIDEO_QUALITY_DEFAULT))
+        u = us[0]
     except HTTPException as e:
         return _err(e.status_code, str(e.detail))
     return {"status": 200, "success": True, "creator": CREATOR, "result": {
@@ -156,7 +176,7 @@ async def ytmp4_dl(request: Request, url: str | None = None, query: str | None =
 async def universal(request: Request, url: str, type: str = "mp3", format: str | None = None):
     if type not in ("mp3", "mp4"):
         return _err(400, "type must be mp3 or mp4")
-    return await (ytaudio(request, url=url) if type == "mp3" else ytmp4_dl(request, url=url, format=format or "480p"))
+    return await (ytaudio(request, url=url) if type == "mp3" else ytmp4_dl(request, url=url, format=format or "360p"))
 
 
 @router.get("/download/ytsearch")
@@ -172,8 +192,9 @@ async def ytsearch(query: str, limit: int = 5):
 
 async def _flat(request, kind, url, query, fmt):
     try:
-        u = await _resolve(url, query)
-        d, f, link = await _fetch(request, u, kind, 0 if kind == "audio" else _q(fmt, 480))
+        us = await _resolve(url, query)
+        d, f, link = await _fetch(request, us, kind, 0 if kind == "audio" else _q(fmt, config.VIDEO_QUALITY_DEFAULT))
+        u = us[0]
     except HTTPException as e:
         return _err(e.status_code, str(e.detail))
     return {"success": True, "title": d.get("title"), "thumbnail": d.get("thumbnail"),
@@ -186,7 +207,7 @@ async def ytmp3(request: Request, query: str | None = None, url: str | None = No
 
 
 @router.get("/ytmp4")
-async def ytmp4(request: Request, query: str | None = None, url: str | None = None, format: str = "480p"):
+async def ytmp4(request: Request, query: str | None = None, url: str | None = None, format: str = "360p"):
     return await _flat(request, "video", url, query, format)
 
 

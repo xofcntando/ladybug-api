@@ -13,6 +13,10 @@ STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 DAILY_REQUEST_LIMIT = int(os.getenv("DAILY_REQUEST_LIMIT", "100000"))
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "1") != "0"
 
+# Small-by-default downloads: 128 kbps MP3 and 360p progressive MP4 (no ffmpeg merge, so it is fast).
+AUDIO_KBPS = int(os.getenv("AUDIO_KBPS", "128"))
+VIDEO_QUALITY_DEFAULT = int(os.getenv("VIDEO_QUALITY_DEFAULT", "360"))
+
 MEDIA_MAX_MB = int(os.getenv("MEDIA_MAX_MB", "100"))
 MEDIA_MAX_MINUTES = int(os.getenv("MEDIA_MAX_MINUTES", "20"))
 MEDIA_TTL_MINUTES = int(os.getenv("MEDIA_TTL_MINUTES", "30"))

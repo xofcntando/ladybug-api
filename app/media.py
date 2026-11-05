@@ -116,7 +116,7 @@ def _opts(tmp: Path, extra: dict, proxy: str | None = None) -> dict:
          "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(), "outtmpl": str(tmp / "%(id)s.%(ext)s"),
          "max_filesize": config.MEDIA_MAX_MB * 1024 * 1024,
          "match_filter": _too_long,
-         "remote_components": ["ejs:github"], "concurrent_fragment_downloads": 4,
+         "remote_components": ["ejs:github"], "concurrent_fragment_downloads": 8,
          "cachedir": "/tmp/yt-dlp-cache", "geo_bypass": True,
          "http_headers": {"Accept-Language": "en-US,en;q=0.9"}}
     if _JS:
@@ -174,11 +174,16 @@ def _is_block(e: Exception) -> bool:
     return not any(p in m for p in _PERMANENT)
 
 
-def _with_clients(fn):
-    """Run fn(extra_opts, proxy); on a block retry with other player clients, rotating proxies when several are set."""
+def _with_clients(fn, attempts: int | None = None):
+    """Run fn(extra_opts, proxy); on a block retry with other player clients, rotating proxies when several are set.
+
+    `attempts` caps the chain. The search-by-name path passes a small number so a blocked video
+    fails over to the next search result quickly instead of walking all six clients first.
+    """
     last = None
     ps = _proxies()
-    for n, clients in enumerate(CLIENT_CHAIN):
+    chain = CLIENT_CHAIN[:attempts] if attempts else CLIENT_CHAIN
+    for n, clients in enumerate(chain):
         extra = {"extractor_args": _yt_args(clients)} if clients else {}
         proxy = ps[n % len(ps)] if ps else None
         try:
@@ -220,18 +225,30 @@ def _info(url: str) -> dict:
     return _with_clients(go)
 
 
-def _download(url: str, kind: str, quality: int) -> tuple[dict, Path]:
-    return _with_clients(lambda extra, proxy: _download_once(url, kind, quality, extra, proxy))
+def _download(url: str, kind: str, quality: int, kbps: int | None = None,
+              attempts: int | None = None) -> tuple[dict, Path]:
+    return _with_clients(lambda extra, proxy: _download_once(url, kind, quality, extra, proxy, kbps), attempts)
 
 
-def _download_once(url: str, kind: str, quality: int, client_opts: dict, proxy: str | None = None) -> tuple[dict, Path]:
+def _download_once(url: str, kind: str, quality: int, client_opts: dict, proxy: str | None = None,
+                   kbps: int | None = None) -> tuple[dict, Path]:
     d = Path(tempfile.mkdtemp(prefix="lb_"))
     if kind == "audio":
-        extra = {"format": "bestaudio/best",
-                 "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}]}
+        # Small by default: prefer an audio stream at or under AUDIO_KBPS so we download less,
+        # and encode at that bitrate instead of a fat 192 kbps file.
+        k = kbps or config.AUDIO_KBPS
+        extra = {"format": f"bestaudio[abr<={k}]/bestaudio[abr<={k + 32}]/bestaudio/best",
+                 "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3",
+                                     "preferredquality": str(k)}]}
     else:
         h = quality
-        extra = {"format": f"bv*[height<={h}][vcodec^=avc1]+ba[ext=m4a]/b[height<={h}][vcodec^=avc1]/bv*[height<={h}][ext=mp4]+ba[ext=m4a]/b[height<={h}]/bv*+ba/b",
+        # Smaller files at the same height: modern codecs (av01 / vp9) are ~25% lighter than the
+        # old progressive H.264 stream, and the merge of two small streams is still fast. The
+        # progressive single-file format stays as the last resort for videos without split streams.
+        extra = {"format": (f"bv*[height<={h}][vcodec^=av01]+ba[ext=m4a]/"
+                            f"bv*[height<={h}][vcodec^=vp9]+ba[ext=webm]/"
+                            f"bv*[height<={h}][vcodec^=avc1]+ba[ext=m4a]/"
+                            f"bv*[height<={h}]+ba/b[height<={h}][ext=mp4]/b[height<={h}]/bv*+ba/b"),
                  "merge_output_format": "mp4"}
     extra.update(client_opts)
     try:
@@ -301,10 +318,11 @@ def _backend_order(url: str) -> list[str]:
     return sorted(order, key=lambda b: _health.get(b, 0) > now)  # stable: healthy first, original order kept
 
 
-async def _run(url: str, kind: str, quality: int, stream: bool):
+async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None = None,
+               attempts: int | None = None):
     await _check_url(url)
     url = knight.canonical(url)
-    key = (url, kind, quality if kind == "video" else 0)
+    key = (url, kind, quality if kind == "video" else 0, kbps if kind == "audio" else 0)
     if (hit := _reusable(key)):  # same video asked again: serve the stored file, no upstream request
         info, f = hit
         if stream:
@@ -329,7 +347,8 @@ async def _run(url: str, kind: str, quality: int, stream: bool):
                 elif backend == "cobalt":
                     info, path, _ = await ytfallback.cobalt_fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
                 else:
-                    info, path = await asyncio.wait_for(asyncio.to_thread(_download, url, kind, quality), timeout=240)
+                    info, path = await asyncio.wait_for(
+                        asyncio.to_thread(_download, url, kind, quality, kbps, attempts), timeout=240)
                 _note(backend, True)
             except HTTPException as e:
                 if e.status_code == 413:
@@ -442,19 +461,22 @@ async def status():
 
 
 @router.get("/ytmp3")
-async def ytmp3(url: str, stream: bool = False):
-    """Audio as MP3 (192 kbps). stream=true returns the file directly instead of a download link."""
-    return await _run(url, "audio", 0, stream)
+async def ytmp3(url: str, kbps: int = Query(config.AUDIO_KBPS, ge=32, le=320,
+                                           description="MP3 bitrate. Lower = smaller and faster."),
+                stream: bool = False):
+    """Audio as a small MP3 (128 kbps by default). stream=true returns the file directly."""
+    return await _run(url, "audio", 0, stream, kbps)
 
 
 @router.get("/ytmp4")
-async def ytmp4(url: str, quality: int = Query(720, ge=144, le=1080), stream: bool = False):
-    """Video as MP4 up to the chosen height."""
+async def ytmp4(url: str, quality: int = Query(config.VIDEO_QUALITY_DEFAULT, ge=144, le=1080), stream: bool = False):
+    """Video as MP4 up to the chosen height (360p by default, progressive so no merge is needed)."""
     return await _run(url, "video", quality, stream)
 
 
 @router.get("/download")
 async def download(url: str, type: str = Query("video", pattern="^(audio|video)$"),
-                   quality: int = Query(720, ge=144, le=1080), stream: bool = False):
+                   quality: int = Query(config.VIDEO_QUALITY_DEFAULT, ge=144, le=1080),
+                   kbps: int = Query(config.AUDIO_KBPS, ge=32, le=320), stream: bool = False):
     """Any supported site (YouTube, TikTok, Instagram, Facebook, X, SoundCloud, Vimeo, Reddit...)."""
-    return await _run(url, type, quality, stream)
+    return await _run(url, type, quality, stream, kbps)
