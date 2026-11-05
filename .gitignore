@@ -5,3 +5,7 @@ __pycache__/
 
 # PO-token provider checkout (fetched at build time)
 .bgutil/
+
+# exported cookie jars (secrets)
+cookies.txt
+*.cookies.txt
