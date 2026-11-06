@@ -534,6 +534,7 @@ async def status():
                                                            "budget": knight.budget()},
             "js_runtime": list(_JS), "yt_dlp_version": ytdlp_update.version(),
             "proxies": len(_proxies()), "po_token_set": bool(config.YT_PO_TOKEN), "pot_provider_set": bool(config.YT_POT_PROVIDER_URL),
+            "pot_autostart": __import__("app.potserver", fromlist=["state"]).state,
             "cobalt_set": ytfallback.cobalt_enabled(),
             "vda_set": ytfallback.vda_enabled(),
             "vda": {"key_present": bool(ytfallback.VDA_KEY),
@@ -612,5 +613,5 @@ async def diagnose(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
 
     attempts = await asyncio.wait_for(asyncio.to_thread(run), timeout=170)
     return {"url": url, "cookies_loaded": bool(_cookies_text()), "proxy_set": bool(_proxies()),
-            "pot_provider": await asyncio.to_thread(probe_provider), "pot_log_tail": pot_log(),
+            "pot_provider": await asyncio.to_thread(probe_provider), "pot_autostart": __import__("app.potserver", fromlist=["state"]).state, "pot_log_tail": pot_log(),
             "playability": await asyncio.to_thread(_playability, url), "attempts": attempts}

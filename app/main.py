@@ -36,6 +36,8 @@ from .ratelimit import limit_middleware, router as account_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    from .potserver import ensure_provider
+    ensure_provider()
     tasks = [asyncio.create_task(_janitor())]
     ping = os.getenv("RENDER_EXTERNAL_URL")
     if ping and config.SELF_PING:
