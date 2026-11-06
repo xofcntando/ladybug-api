@@ -13,22 +13,31 @@ TAG="${BGUTIL_TAG:-2.0.2}"
 
 # Locate deno: the pip "deno" package installs it into the venv, which is often NOT on PATH
 # in Render's build/start shells, so `command -v deno` alone silently skips the PO-token provider.
-DENO_BIN="$(command -v deno 2>/dev/null || true)"
+# The app passes the binary it found via $DENO_BIN; otherwise look on PATH, then in whichever python has the package.
+DENO_BIN="${DENO_BIN:-$(command -v deno 2>/dev/null || true)}"
 if [ -z "$DENO_BIN" ]; then
-  DENO_BIN="$(python3 -c 'import deno; print(deno.find_deno_bin())' 2>/dev/null || python -c 'import deno; print(deno.find_deno_bin())' 2>/dev/null || true)"
+  for PY in "${PYTHON:-}" python3 python; do
+    [ -n "$PY" ] || continue
+    DENO_BIN="$("$PY" -c 'import deno; print(deno.find_deno_bin())' 2>/dev/null || true)"
+    [ -n "$DENO_BIN" ] && break
+  done
 fi
 [ -n "$DENO_BIN" ] && [ -x "$DENO_BIN" ] || DENO_BIN=""
 
-if [ -f "$DEST/server/src/main.ts" ]; then
+# "Prepared" means sources AND node_modules. A checkout without dependencies (e.g. an earlier run that could not
+# find deno) fails with "Could not resolve express", so it must be completed, not skipped.
+if [ -f "$DEST/server/src/main.ts" ] && [ -d "$DEST/server/node_modules/express" ]; then
   echo "[pot] already prepared at $DEST"
   exit 0
 fi
 
-echo "[pot] fetching bgutil-ytdlp-pot-provider $TAG"
-rm -rf "$DEST"
-git clone --depth 1 --branch "$TAG" \
-  https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "$DEST" \
-  || git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "$DEST"
+if [ ! -f "$DEST/server/src/main.ts" ]; then
+  echo "[pot] fetching bgutil-ytdlp-pot-provider $TAG"
+  rm -rf "$DEST"
+  git clone --depth 1 --branch "$TAG" \
+    https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "$DEST" \
+    || git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "$DEST"
+fi
 
 if [ -n "$DENO_BIN" ]; then
   # The server imports npm packages (express, canvas, @swc/core); without this
@@ -39,7 +48,10 @@ if [ -n "$DENO_BIN" ]; then
   echo "[pot] warming deno cache"
   ( cd "$DEST/server" && "$DENO_BIN" cache src/main.ts ) || echo "[pot] cache warm failed (non-fatal)"
 else
-  echo "[pot] WARNING: deno not on PATH; provider will not start"
+  echo "[pot] deno not found; installing dependencies with npm"
+  ( cd "$DEST/server" && npm install --omit=dev ) || { echo "[pot] ERROR: dependency install failed"; exit 1; }
 fi
+
+[ -d "$DEST/server/node_modules/express" ] || { echo "[pot] ERROR: node_modules/express missing after install"; exit 1; }
 
 echo "[pot] ready"
