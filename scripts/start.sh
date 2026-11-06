@@ -20,7 +20,7 @@ fi
 
 if [ -f "$DEST/server/src/main.ts" ] && [ -n "$DENO_BIN" ]; then
   echo "[start] launching PO-token provider on 127.0.0.1:$POT_PORT"
-  ( cd "$DEST/server" && exec "$DENO_BIN" run --allow-all src/main.ts --port "$POT_PORT" ) >/tmp/pot.log 2>&1 &
+  ( cd "$DEST/server" && exec "$DENO_BIN" run --v8-flags=--max-old-space-size="${POT_MAX_HEAP_MB:-160}" --allow-all src/main.ts --port "$POT_PORT" ) >/tmp/pot.log 2>&1 &
   POT_PID=$!
 
   # Wait up to 60s so the first download does not race the provider.

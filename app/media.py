@@ -21,7 +21,7 @@ from .security import assert_public_url
 from .storage import meta_path, save_path
 
 router = APIRouter(prefix="/v1/media", tags=["media"])
-_sem = asyncio.Semaphore(2)  # protect small instances
+_sem = asyncio.Semaphore(config.MEDIA_CONCURRENCY)  # one download at a time by default: protects small instances
 
 ALLOWED = ("youtube.com", "youtu.be", "youtube-nocookie.com", "tiktok.com", "instagram.com", "facebook.com", "fb.watch",
            "twitter.com", "x.com", "soundcloud.com", "vimeo.com", "dailymotion.com", "reddit.com", "pinterest.com", "twitch.tv")
@@ -158,7 +158,8 @@ def _opts(tmp: Path, extra: dict, proxy: str | None = None) -> dict:
          "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(), "outtmpl": str(tmp / "%(id)s.%(ext)s"),
          "max_filesize": config.MEDIA_MAX_MB * 1024 * 1024,
          "match_filter": _too_long,
-         "remote_components": ["ejs:github"], "concurrent_fragment_downloads": 8,
+         "remote_components": ["ejs:github"], "concurrent_fragment_downloads": config.YTDLP_FRAGMENTS,
+         "postprocessor_args": {"ffmpeg": ["-threads", "1"]},
          "cachedir": "/tmp/yt-dlp-cache", "geo_bypass": True,
          "http_headers": {"Accept-Language": "en-US,en;q=0.9"}}
     if _JS:

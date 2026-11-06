@@ -66,7 +66,7 @@ def _run():
             state.update(phase="failed", detail="main.ts missing after setup")
             return
         log = open("/tmp/pot.log", "ab")
-        _proc = subprocess.Popen([deno, "run", "--allow-all", "src/main.ts", "--port", str(PORT)],
+        _proc = subprocess.Popen([deno, "run", f"--v8-flags=--max-old-space-size={config.POT_MAX_HEAP_MB}", "--allow-all", "src/main.ts", "--port", str(PORT)],
                                  cwd=str(DEST / "server"), stdout=log, stderr=subprocess.STDOUT)
         state.update(phase="starting", detail=f"pid {_proc.pid}")
         for _ in range(90):
