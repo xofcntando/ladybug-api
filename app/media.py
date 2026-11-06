@@ -615,3 +615,76 @@ async def diagnose(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
     return {"url": url, "cookies_loaded": bool(_cookies_text()), "proxy_set": bool(_proxies()),
             "pot_provider": await asyncio.to_thread(probe_provider), "pot_autostart": __import__("app.potserver", fromlist=["state"]).state, "pot_log_tail": pot_log(),
             "playability": await asyncio.to_thread(_playability, url), "attempts": attempts}
+
+
+def _cookie_jar() -> dict[str, str]:
+    """Netscape cookies text -> {name: value} for YouTube / Google domains (for the raw probe)."""
+    jar: dict[str, str] = {}
+    for l in _cookies_text().splitlines():
+        if l.startswith("#HttpOnly_"):
+            l = l[len("#HttpOnly_"):]
+        elif l.startswith("#") or not l.strip():
+            continue
+        f = l.split("\t")
+        if len(f) >= 7 and ("youtube.com" in f[0] or "google.com" in f[0]):
+            jar[f[5]] = f[6]
+    return jar
+
+
+@router.get("/probe")
+async def probe(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
+    """Raw (non-yt-dlp) request to YouTube from this server, with and without the configured cookies.
+
+    Separates the three possible causes of "YouTube blocks this server": the egress IP itself is blocked or cannot
+    reach YouTube, the cookies are rejected / expired (page loads but is not logged in), or yt-dlp specifically is
+    being refused. Never reveals cookie values."""
+    import httpx
+    await _check_url(url)
+    url = knight.canonical(url)
+    ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+          "Chrome/131.0.0.0 Safari/537.36")
+    px = _proxies()[0] if _proxies() else None
+    jar = _cookie_jar()
+
+    async def fetch(target: str, cookies: dict | None):
+        t0 = time.monotonic()
+        try:
+            async with httpx.AsyncClient(proxy=px, timeout=25, follow_redirects=True,
+                                         headers={"User-Agent": ua, "Accept-Language": "en-US,en;q=0.9"},
+                                         cookies={**{"SOCS": "CAI", "CONSENT": "YES+1"}, **(cookies or {})}) as c:
+                r = await c.get(target)
+            body = r.text[:3_000_000]
+            status = re.search(r'"playabilityStatus":\{"status":"([A-Z_]+)"', body)
+            reason = re.search(r'"playabilityStatus":\{"status":"[A-Z_]+","reason":"([^"]{0,160})', body)
+            return {"http": r.status_code, "final_host": r.url.host, "bytes": len(r.content),
+                    "logged_in": bool(re.search(r'"LOGGED_IN":\s*true', body)),
+                    "playability": status.group(1) if status else None,
+                    "reason": reason.group(1) if reason else None,
+                    "consent_or_captcha_page": ("consent.youtube.com" in str(r.url)) or ("/sorry/" in str(r.url)),
+                    "has_player_response": "ytInitialPlayerResponse" in body, "seconds": round(time.monotonic() - t0, 1)}
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"{type(e).__name__}: {str(e)[:160]}", "seconds": round(time.monotonic() - t0, 1)}
+
+    async def egress():
+        try:
+            async with httpx.AsyncClient(proxy=px, timeout=10) as c:
+                return (await c.get("https://api.ipify.org")).text.strip()
+        except Exception as e:  # noqa: BLE001
+            return f"unknown ({type(e).__name__})"
+
+    ip, anon, authed, g204 = await asyncio.gather(
+        egress(), fetch(url, None), fetch(url, jar) if jar else asyncio.sleep(0, result=None),
+        fetch("https://www.youtube.com/generate_204", None))
+    verdict = "unknown"
+    if anon.get("error") and g204.get("error"):
+        verdict = "This server cannot reach YouTube at all (network/IP level)."
+    elif authed and authed.get("logged_in") and authed.get("has_player_response") and authed.get("playability") == "OK":
+        verdict = "Cookies work and YouTube serves the player from this IP; the problem is in yt-dlp, not the IP."
+    elif authed and not authed.get("logged_in") and jar:
+        verdict = "YouTube loads but does NOT treat the cookies as signed in: they are expired/rotated. Re-export them."
+    elif anon.get("playability") in ("LOGIN_REQUIRED",) and not (authed or {}).get("logged_in"):
+        verdict = "YouTube is bot-checking this IP (LOGIN_REQUIRED for anonymous requests). Needs a residential YT_PROXY."
+    elif not anon.get("has_player_response"):
+        verdict = "YouTube answers but withholds the player data from this IP: an IP-reputation block. Needs a residential YT_PROXY."
+    return {"egress_ip": ip, "proxy_set": bool(px), "cookie_count": len(jar), "anonymous": anon,
+            "with_cookies": authed, "generate_204": g204, "verdict": verdict}
