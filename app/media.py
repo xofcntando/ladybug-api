@@ -324,14 +324,17 @@ def _download_once(url: str, kind: str, quality: int, client_opts: dict, proxy: 
                                      "preferredquality": str(k)}]}
     else:
         h = quality
-        # Smaller files at the same height: modern codecs (av01 / vp9) are ~25% lighter than the
-        # old progressive H.264 stream, and the merge of two small streams is still fast. The
-        # progressive single-file format stays as the last resort for videos without split streams.
-        extra = {"format": (f"bv*[height<={h}][vcodec^=av01]+ba[ext=m4a]/"
-                            f"bv*[height<={h}][vcodec^=vp9]+ba[ext=webm]/"
-                            f"bv*[height<={h}][vcodec^=avc1]+ba[ext=m4a]/"
-                            f"bv*[height<={h}]+ba/b[height<={h}][ext=mp4]/b[height<={h}]/bv*+ba/b"),
-                 "merge_output_format": "mp4"}
+        cap = config.VIDEO_MAX_MB
+        # Hard size cap (VIDEO_MAX_MB, default 20). Prefer ONE progressive MP4 file (no ffmpeg merge: least memory,
+        # fastest), stepping down through lower heights until a stream fits the cap; only then try a split
+        # video+audio pair that fits, and finally the smallest stream there is.
+        heights = [x for x in (h, 720, 480, 360, 240, 144) if x <= h]
+        heights = sorted(set(heights), reverse=True)
+        steps = [f"b[height<={x}][ext=mp4][filesize<?{cap}M][filesize_approx<?{cap}M]" for x in heights]
+        steps += [f"bv*[height<={x}][filesize<?{cap - 4}M][filesize_approx<?{cap - 4}M]+ba[filesize<?4M]" for x in heights[:3]]
+        steps += ["w[ext=mp4]", "w"]
+        extra = {"format": "/".join(steps), "merge_output_format": "mp4",
+                 "max_filesize": cap * 1024 * 1024}
     extra.update(client_opts)
     try:
         with yt_dlp.YoutubeDL(_opts(d, extra, proxy)) as y:
@@ -339,10 +342,18 @@ def _download_once(url: str, kind: str, quality: int, client_opts: dict, proxy: 
         ext = "mp3" if kind == "audio" else "mp4"
         files = sorted(d.glob(f"*.{ext}")) or [f for f in d.iterdir() if f.suffix not in (".txt", ".part")]
         if not files:
-            raise HTTPException(413, f"Video too long (>{config.MEDIA_MAX_MINUTES} min) or too large (>{config.MEDIA_MAX_MB} MB)")
+            raise HTTPException(413, f"Video too long (>{config.MEDIA_MAX_MINUTES} min) or too large (>{config.VIDEO_MAX_MB if kind == 'video' else config.MEDIA_MAX_MB} MB)")
     except BaseException:
         shutil.rmtree(d, ignore_errors=True)  # never leave half-downloaded files on a small disk
         raise
+    if kind == "video" and files[0].stat().st_size > config.VIDEO_MAX_MB * 1048576:
+        # Sizes are sometimes unknown before downloading, so enforce the cap on the result: drop the file and retry
+        # one step lower; at 144p there is nothing smaller, so give a clear error.
+        shutil.rmtree(d, ignore_errors=True)
+        lower = [x for x in (720, 480, 360, 240, 144) if x < quality]
+        if lower:
+            return _download_once(url, kind, lower[0], client_opts, proxy, kbps)
+        raise HTTPException(413, f"Video is larger than {config.VIDEO_MAX_MB} MB even at 144p")
     return info, files[0]
 
 

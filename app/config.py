@@ -18,6 +18,7 @@ AUDIO_KBPS = int(os.getenv("AUDIO_KBPS", "128"))
 VIDEO_QUALITY_DEFAULT = int(os.getenv("VIDEO_QUALITY_DEFAULT", "360"))
 
 MEDIA_MAX_MB = int(os.getenv("MEDIA_MAX_MB", "50"))
+VIDEO_MAX_MB = int(os.getenv("VIDEO_MAX_MB", "20"))  # hard cap for downloaded videos (MP4)
 MEDIA_MAX_MINUTES = int(os.getenv("MEDIA_MAX_MINUTES", "12"))
 MEDIA_TTL_MINUTES = int(os.getenv("MEDIA_TTL_MINUTES", "10"))
 MAX_STORAGE_MB = int(os.getenv("MAX_STORAGE_MB", "150"))   # downloads beyond this are deleted oldest-first
