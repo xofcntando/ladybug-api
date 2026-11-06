@@ -11,6 +11,14 @@ set -euo pipefail
 DEST="${BGUTIL_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.bgutil}"
 TAG="${BGUTIL_TAG:-2.0.2}"
 
+# Locate deno: the pip "deno" package installs it into the venv, which is often NOT on PATH
+# in Render's build/start shells, so `command -v deno` alone silently skips the PO-token provider.
+DENO_BIN="$(command -v deno 2>/dev/null || true)"
+if [ -z "$DENO_BIN" ]; then
+  DENO_BIN="$(python3 -c 'import deno; print(deno.find_deno_bin())' 2>/dev/null || python -c 'import deno; print(deno.find_deno_bin())' 2>/dev/null || true)"
+fi
+[ -n "$DENO_BIN" ] && [ -x "$DENO_BIN" ] || DENO_BIN=""
+
 if [ -f "$DEST/server/src/main.ts" ]; then
   echo "[pot] already prepared at $DEST"
   exit 0
@@ -22,14 +30,14 @@ git clone --depth 1 --branch "$TAG" \
   https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "$DEST" \
   || git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "$DEST"
 
-if command -v deno >/dev/null 2>&1; then
+if [ -n "$DENO_BIN" ]; then
   # The server imports npm packages (express, canvas, @swc/core); without this
   # the first run fails with "Could not resolve express".
   echo "[pot] installing node dependencies"
-  ( cd "$DEST/server" && deno install ) || ( cd "$DEST/server" && npm install --omit=dev )
+  ( cd "$DEST/server" && "$DENO_BIN" install ) || ( cd "$DEST/server" && npm install --omit=dev )
 
   echo "[pot] warming deno cache"
-  ( cd "$DEST/server" && deno cache src/main.ts ) || echo "[pot] cache warm failed (non-fatal)"
+  ( cd "$DEST/server" && "$DENO_BIN" cache src/main.ts ) || echo "[pot] cache warm failed (non-fatal)"
 else
   echo "[pot] WARNING: deno not on PATH; provider will not start"
 fi

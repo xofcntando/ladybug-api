@@ -10,9 +10,17 @@ DEST="${BGUTIL_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.bgutil}"
 POT_PORT="${BGUTIL_PORT:-4416}"
 APP_PORT="${PORT:-8000}"
 
-if [ -f "$DEST/server/src/main.ts" ] && command -v deno >/dev/null 2>&1; then
+# Locate deno: the pip "deno" package installs it into the venv, which is often NOT on PATH
+# in Render's build/start shells, so `command -v deno` alone silently skips the PO-token provider.
+DENO_BIN="$(command -v deno 2>/dev/null || true)"
+if [ -z "$DENO_BIN" ]; then
+  DENO_BIN="$(python3 -c 'import deno; print(deno.find_deno_bin())' 2>/dev/null || python -c 'import deno; print(deno.find_deno_bin())' 2>/dev/null || true)"
+fi
+[ -n "$DENO_BIN" ] && [ -x "$DENO_BIN" ] || DENO_BIN=""
+
+if [ -f "$DEST/server/src/main.ts" ] && [ -n "$DENO_BIN" ]; then
   echo "[start] launching PO-token provider on 127.0.0.1:$POT_PORT"
-  ( cd "$DEST/server" && exec deno run --allow-all src/main.ts --port "$POT_PORT" ) >/tmp/pot.log 2>&1 &
+  ( cd "$DEST/server" && exec "$DENO_BIN" run --allow-all src/main.ts --port "$POT_PORT" ) >/tmp/pot.log 2>&1 &
   POT_PID=$!
 
   # Wait up to 60s so the first download does not race the provider.
@@ -34,7 +42,7 @@ if [ -f "$DEST/server/src/main.ts" ] && command -v deno >/dev/null 2>&1; then
     kill "$POT_PID" 2>/dev/null || true
   fi
 else
-  echo "[start] PO-token provider not prepared; skipping"
+  echo "[start] PO-token provider not prepared (main.ts present: $([ -f "$DEST/server/src/main.ts" ] && echo yes || echo no), deno: ${DENO_BIN:-missing}); skipping"
 fi
 
 exec uvicorn app.main:app \

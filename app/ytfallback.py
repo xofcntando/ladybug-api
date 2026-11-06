@@ -139,6 +139,7 @@ def vda_enabled() -> bool:
 
 
 async def vda_fetch(url: str, kind: str, quality: int, max_minutes: int):
+    global vda_last_error, vda_key_invalid
     """Same return shape as knight.fetch: (info, Path, ext). Submit job -> poll progress until 1000 -> download."""
     from .music import _fetch
     fmt = "mp3" if kind == "audio" else str(min(VDA_VIDEO_Q, key=lambda x: (x < quality, abs(x - quality))))
@@ -151,14 +152,17 @@ async def vda_fetch(url: str, kind: str, quality: int, max_minutes: int):
     except (httpx.HTTPError, ValueError) as e:
         raise HTTPException(502, f"VDA unreachable ({type(e).__name__})")
     if r.status_code in (401, 402, 403):  # bad key / no balance: tell the owner, not the end user
-        global vda_last_error, vda_key_invalid
         msg = str(d.get("error_code") or d.get("message") or r.status_code)
         vda_last_error = msg
         if "key does not exist" in msg.lower() or "invalid" in msg.lower() or "unauthor" in msg.lower():
             vda_key_invalid = True  # stop trying it until the process restarts
         raise HTTPException(502, f"VDA: {msg}")
     jid = d.get("id")
-    if r.status_code >= 400 or not jid:
+    if not jid or r.status_code >= 400:
+        why = str(d.get("message") or d.get("error_code") or r.status_code)
+        if "balance" in why.lower() or "credit" in why.lower():
+            vda_last_error = why
+            raise HTTPException(502, "VDA: out of balance - top up at https://video-download-api.com/dashboard")
         raise HTTPException(502, f"VDA could not start the job: {d.get('message') or d.get('error_code') or r.status_code}")
     info = d.get("info") or {}
     link = None

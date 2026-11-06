@@ -61,18 +61,59 @@ def _js_runtimes() -> dict:
 _JS = _js_runtimes()
 
 
+def _json_cookies_to_netscape(raw: str) -> str:
+    """Browser extensions (EditThisCookie, Cookie-Editor) export a JSON array; turn it into cookies.txt."""
+    try:
+        items = json.loads(raw)
+    except ValueError:
+        return raw
+    if not isinstance(items, list):
+        return raw
+    out = ["# Netscape HTTP Cookie File"]
+    for c in items:
+        if not isinstance(c, dict) or not c.get("name"):
+            continue
+        dom = c.get("domain") or ""
+        exp = c.get("expirationDate") or c.get("expires") or 0
+        out.append("\t".join([("#HttpOnly_" if c.get("httpOnly") else "") + dom,
+                              "TRUE" if dom.startswith(".") else "FALSE", c.get("path") or "/",
+                              "TRUE" if c.get("secure") else "FALSE", str(int(exp)) if exp and exp > 0 else "0",
+                              str(c["name"]), str(c.get("value", ""))]))
+    return "\n".join(out)
+
+
+def _fix_cookie_tabs(raw: str) -> str:
+    """Render's env editor (and many chat/paste boxes) turn tabs into spaces, which silently breaks cookies.txt:
+    yt-dlp then loads zero cookies and YouTube sees an anonymous datacenter request. Re-join 7-field lines with tabs."""
+    fixed = []
+    for line in raw.split("\n"):
+        if not line.strip():
+            continue
+        if line.startswith("#") and not line.startswith("#HttpOnly_"):
+            fixed.append(line)
+        elif "\t" in line:
+            fixed.append(line)
+        else:
+            parts = line.split(None, 6)  # the value is the last field and never contains spaces
+            fixed.append("\t".join(parts) if len(parts) == 7 else line)
+    return "\n".join(fixed)
+
+
 def _cookies_text() -> str:
-    """YT_COOKIES may be pasted as Netscape cookies.txt (real or literal \\n newlines) or base64 of that file."""
+    """YT_COOKIES may be pasted as Netscape cookies.txt (real or literal \\n newlines), a JSON cookie export, or base64."""
     raw = (config.YT_COOKIES or "").strip().strip('"').strip("'")
     if not raw:
         return ""
-    if "\t" not in raw and "\\t" not in raw and "youtube" not in raw.lower():
+    if raw[:1] not in "[{#" and "\t" not in raw and "\\t" not in raw and "youtube" not in raw.lower():
         try:
             import base64
             raw = base64.b64decode(raw, validate=False).decode("utf-8", "ignore")
         except Exception:  # noqa: BLE001
             pass
-    raw = raw.replace("\\n", "\n").replace("\\t", "\t").replace("\r\n", "\n").replace("\r", "\n")
+    raw = raw.replace("\\n", "\n").replace("\\t", "\t").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if raw.startswith("["):
+        raw = _json_cookies_to_netscape(raw)
+    raw = _fix_cookie_tabs(raw)
     if not raw.lstrip().startswith("# Netscape") and not raw.lstrip().startswith("# HTTP Cookie"):
         raw = "# Netscape HTTP Cookie File\n" + raw
     return raw + "\n"
@@ -414,8 +455,8 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
                 raise HTTPException(502, f"YouTube blocks this server on every method tried ({tried}). "
                                          "Fix: set YT_COOKIES (exported from a private window) or YT_PROXY (residential), "
                                          "or your own KNIGHT_API_KEY / COBALT_API_URL, in Render. Check /v1/media/status. "
-                                         f"Details: {' | '.join(errors)[-300:]}")
-            raise HTTPException(502, f"Download failed on every method tried ({tried}): {' | '.join(errors)[-300:]}")
+                                         f"Details: {' | '.join(x[:220] for x in errors)}")
+            raise HTTPException(502, f"Download failed on every method tried ({tried}): {' | '.join(x[:220] for x in errors)}")
     ext = path.suffix.lstrip(".")
     name = re.sub(r'[\\/:*?"<>|]+', "", info.get("title") or "media")[:80].strip() or "media"
     ctype = "audio/mpeg" if kind == "audio" else "video/mp4"
@@ -524,3 +565,52 @@ async def download(url: str, type: str = Query("video", pattern="^(audio|video)$
                    kbps: int = Query(config.AUDIO_KBPS, ge=32, le=320), stream: bool = False):
     """Any supported site (YouTube, TikTok, Instagram, Facebook, X, SoundCloud, Vimeo, Reddit...)."""
     return await _run(url, type, quality, stream, kbps)
+
+
+@router.get("/diagnose")
+async def diagnose(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
+    """Owner-facing check: try each yt-dlp player client once and report the raw error of each, plus whether the
+    PO-token provider is reachable. Use it to see WHY YouTube is blocking this server (cookies rejected, no PO token,
+    IP flagged) instead of guessing from the generic message. Never reveals cookie values."""
+    await _check_url(url)
+    url = knight.canonical(url)
+
+    def probe_provider():
+        base = config.YT_POT_PROVIDER_URL
+        if not base:
+            return {"configured": False, "hint": "No PO-token provider: see /tmp/pot.log tail below and the [start] lines in the Render logs"}
+        try:
+            with urllib.request.urlopen(base.rstrip("/") + "/ping", timeout=3) as r:
+                return {"configured": True, "reachable": True, "ping": r.read(200).decode("utf-8", "replace")}
+        except Exception as e:  # noqa: BLE001
+            return {"configured": True, "reachable": False, "error": str(e)[:160]}
+
+    def pot_log():
+        try:
+            return Path("/tmp/pot.log").read_text(errors="replace")[-600:]
+        except Exception:  # noqa: BLE001
+            return None
+
+    def run():
+        out = []
+        ps = _proxies()
+        for n, clients in enumerate(CLIENT_CHAIN):
+            extra = {"extractor_args": _yt_args(clients)} if clients else {}
+            t0 = time.monotonic()
+            try:
+                with tempfile.TemporaryDirectory() as d:
+                    with yt_dlp.YoutubeDL(_opts(Path(d), {"skip_download": True, **extra}, ps[n % len(ps)] if ps else None)) as y:
+                        i = y.extract_info(url, download=False)
+                out.append({"clients": clients or "default", "ok": True, "title": i.get("title"),
+                            "formats": len(i.get("formats") or []), "seconds": round(time.monotonic() - t0, 1)})
+                break
+            except Exception as e:  # noqa: BLE001
+                msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e))
+                out.append({"clients": clients or "default", "ok": False, "error": msg[-260:],
+                            "seconds": round(time.monotonic() - t0, 1)})
+        return out
+
+    attempts = await asyncio.wait_for(asyncio.to_thread(run), timeout=170)
+    return {"url": url, "cookies_loaded": bool(_cookies_text()), "proxy_set": bool(_proxies()),
+            "pot_provider": await asyncio.to_thread(probe_provider), "pot_log_tail": pot_log(),
+            "playability": await asyncio.to_thread(_playability, url), "attempts": attempts}
