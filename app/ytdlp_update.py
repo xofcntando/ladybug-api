@@ -17,7 +17,7 @@ def _pip(*args: str, timeout: int = 90) -> bool:
     import importlib.util
     import shutil
     if importlib.util.find_spec("pip"):
-        cmd = [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--no-input",
+        cmd = [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--no-input", "--no-cache-dir",
                "--upgrade", "--target", str(TARGET), *args]
     elif shutil.which("uv"):
         cmd = ["uv", "pip", "install", "--quiet", "--python", sys.executable, "--upgrade", "--target", str(TARGET), *args]

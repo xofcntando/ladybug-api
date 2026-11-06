@@ -88,7 +88,7 @@ def cleanup(force: bool = False) -> dict:
     import tempfile
     for d in Path(tempfile.gettempdir()).glob("lb_*"):  # abandoned work dirs from failed/timed-out downloads
         try:
-            if now - d.stat().st_mtime > 900:
+            if now - d.stat().st_mtime > 300:
                 shutil.rmtree(d, ignore_errors=True)
         except OSError:
             continue
