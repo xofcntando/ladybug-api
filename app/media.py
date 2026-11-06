@@ -782,7 +782,11 @@ async def probe(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
         egress(), fetch(url, None), fetch(url, jar) if jar else asyncio.sleep(0, result=None),
         fetch("https://www.youtube.com/generate_204", None))
     verdict = "unknown"
-    if anon.get("error") and g204.get("error"):
+    if anon.get("consent_or_captcha_page") or anon.get("http") == 429:
+        verdict = ("Google/YouTube is serving its 'unusual traffic' captcha page (HTTP 429) to this server's IP "
+                   f"({ip}), with or without cookies. It is an IP-reputation block: cookies cannot fix it. "
+                   "Needs a residential YT_PROXY, or the VDA fallback with a positive balance.")
+    elif anon.get("error") and g204.get("error"):
         verdict = "This server cannot reach YouTube at all (network/IP level)."
     elif authed and authed.get("logged_in") and authed.get("has_player_response") and authed.get("playability") == "OK":
         verdict = "Cookies work and YouTube serves the player from this IP; the problem is in yt-dlp, not the IP."
