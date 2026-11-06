@@ -54,10 +54,11 @@ def _run():
         if not deno:
             state.update(phase="failed", detail="deno binary not found (pip package 'deno' missing?)")
             return
-        if not (DEST / "server" / "src" / "main.ts").exists():
-            state.update(phase="installing", detail="provider not built at deploy time; installing now")
+        if not ((DEST / "server" / "src" / "main.ts").exists() and (DEST / "server" / "node_modules" / "express").exists()):
+            state.update(phase="installing", detail="provider not fully built at deploy time; installing now")
             r = subprocess.run(["bash", str(ROOT / "scripts" / "setup_pot.sh")], capture_output=True, text=True,
-                               timeout=420, env={**os.environ, "BGUTIL_HOME": str(DEST)})
+                               timeout=420, env={**os.environ, "BGUTIL_HOME": str(DEST), "DENO_BIN": deno,
+                                                 "PYTHON": sys.executable})
             if r.returncode != 0:
                 state.update(phase="failed", detail="setup failed: " + (r.stderr or r.stdout)[-300:])
                 return
@@ -70,7 +71,11 @@ def _run():
         state.update(phase="starting", detail=f"pid {_proc.pid}")
         for _ in range(90):
             if _proc.poll() is not None:
-                state.update(phase="failed", detail=f"provider exited with code {_proc.returncode}")
+                try:
+                    tail = Path("/tmp/pot.log").read_text(errors="ignore")[-200:]
+                except Exception:  # noqa: BLE001
+                    tail = ""
+                state.update(phase="failed", detail=f"provider exited with code {_proc.returncode}: {tail}")
                 return
             if _ping(url):
                 config.YT_POT_PROVIDER_URL = config.YT_POT_PROVIDER_URL or url
