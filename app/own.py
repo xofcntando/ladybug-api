@@ -15,6 +15,7 @@ from fastapi.responses import Response
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 from .cards import _circle, _fit, _font, _letter_avatar, _opt
+from . import db
 from .cache import TTLCache
 from .fetch import fetch_bytes
 from .http import client
@@ -140,6 +141,14 @@ def _lrclib_out(x: dict, synced: bool, title=None, artist=None) -> dict | None:
     return out
 
 
+async def _remember(key: str, out: dict) -> dict:
+    """Short in-memory cache plus (if MongoDB is on) a 7-day persistent one. Instrumental/empty results are not persisted."""
+    _cset(key, out)
+    if out.get("lyrics"):
+        await db.cache_set(key, out)
+    return out
+
+
 async def _ovh(artist: str, title: str) -> str:
     try:
         r = await client().get(f"https://api.lyrics.ovh/v1/{quote(artist, safe='')}/{quote(title, safe='')}",
@@ -163,6 +172,8 @@ async def lyrics(query: str | None = Query(None, min_length=2, max_length=150, d
     key = f"ly2:{_norm(free)}:{_norm(title)}:{_norm(artist)}:{synced}"
     if (hit := _cget(key)) is not None:
         return hit
+    if (hit := await db.cache_get(key)) is not None:  # lyrics never change: long-lived MongoDB cache (if configured)
+        return _cset(key, hit)
 
     # 1. identify the song (skipped when the caller already gave a clean title + artist)
     known = {"title": title, "artist": artist, "duration": None} if title and artist else None
@@ -194,7 +205,7 @@ async def lyrics(query: str | None = Query(None, min_length=2, max_length=150, d
         if _score(best, want_t, want_a, qtok, c_dur) > 0 or ident is None:
             out = _lrclib_out(best, synced, c_title if ident else None, c_artist if ident else None)
             if out:
-                return _cset(key, out)
+                return await _remember(key, out)
     if any(p.get("instrumental") for p in pool) and not cands and ident:
         return _cset(key, {"provider": "lrclib", "title": c_title, "artist": c_artist, "album": None, "duration": c_dur,
                            "instrumental": True, "lyrics": ""})
@@ -208,7 +219,7 @@ async def lyrics(query: str | None = Query(None, min_length=2, max_length=150, d
         pairs += [(l, r), (r, l)]
     for a, t in dict.fromkeys(pairs):
         if ly := await _ovh(a, t):
-            return _cset(key, {"provider": "lyrics.ovh", "title": t, "artist": a, "album": None, "duration": None,
+            return await _remember(key, {"provider": "lyrics.ovh", "title": t, "artist": a, "album": None, "duration": None,
                                "instrumental": False, "lyrics": ly})
     raise HTTPException(404, "No lyrics found. Check the spelling, or pass title= and artist=")
 

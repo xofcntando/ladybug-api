@@ -16,3 +16,4 @@ deno>=2.0.0
 bgutil-ytdlp-pot-provider>=2.0.2
 playwright>=1.49.0
 tzdata>=2024.1
+pymongo>=4.10

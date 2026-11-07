@@ -82,6 +82,14 @@ These run ourselves, so they keep working even if every third-party service is d
 
 **Nothing in this service calls KnightBot any more.** The whole `knight_api` module is gone; `app/knight.py` survives only as an optional last-resort download backend that is disabled by default (`YT_BACKEND=ytdlp`). Not included on purpose: Spotify track ripping and NSFW tools.
 
+### MongoDB (optional persistence)
+Set `MONGODB_URI` (any MongoDB, e.g. a free Atlas cluster; allow Render's IPs, `0.0.0.0/0`) and optionally `MONGODB_DB` (default `ladybug_api`). Without it nothing changes; with it:
+- **Quota survives redeploys.** Counts are saved every ~10 s in 1-minute buckets (API keys are stored as a hash) and restored at startup. The request path stays in memory and never waits on the database.
+- **Rotate YouTube cookies without a redeploy.** Set `ADMIN_API_KEY` (different from `API_KEYS`), then `PUT /v1/admin/cookies` with `{"text": "<cookies.txt>"}` (Netscape, JSON export or base64). They go live immediately, survive restarts and win over the `YT_COOKIES` env var; `DELETE /v1/admin/cookies` goes back to the env var. `GET /v1/admin/storage` shows the connection state and where the cookies come from. Cookie values are never returned. Admin endpoints are off until `ADMIN_API_KEY` is set.
+- **Lyrics cache.** Found lyrics are kept for 7 days (TTL index), so repeat lookups skip the upstream services.
+
+If MongoDB is unreachable the API keeps working from memory and `/ready` reports `mongodb: false`.
+
 ### Developer & web utilities (pure Python, no external service)
 `/v1/dev/*` are small, instant helpers built on the standard library, so they work offline and never rate-limit:
 Base64/URL/HTML encode and decode, JSON format/validate, case conversion (camel, snake, kebab, constant, ...), text
