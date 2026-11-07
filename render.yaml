@@ -57,7 +57,7 @@ services:
         sync: false
       - key: YT_POT_PROVIDER_URL # optional: bgutil PO-token provider server URL
         sync: false
-      - key: VDA_API_KEY         # optional: video-download-api.com key (~$0.0002 per MP3/MP4), works from Render's IP
+      - key: VDA_API_KEY         # optional: video-download-api.com key(s), comma-separated for up to 10 (~$0.0002 per MP3/MP4), works from Render IP
         sync: false
       - key: COBALT_API_URL      # optional: your own Cobalt instance as an extra YouTube backend
         sync: false
