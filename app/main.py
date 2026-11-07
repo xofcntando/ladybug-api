@@ -24,6 +24,8 @@ from .utils import router as utils_router
 from .media import router as media_router
 from .ai_media import router as ai_media_router
 from .anime import router as anime_router
+from .anime_plus import router as anime_plus_router
+from .business import router as business_router
 from .music import router as music_router
 from .own import router as own_router
 from .youtube import router as youtube_router
@@ -114,6 +116,8 @@ app.include_router(utils_router, dependencies=auth)
 app.include_router(media_router, dependencies=auth)
 app.include_router(ai_media_router, dependencies=auth)
 app.include_router(anime_router, dependencies=auth)
+app.include_router(anime_plus_router, dependencies=auth)  # recommend, characters, relations, studio, staff, discover...
+app.include_router(business_router, dependencies=auth)  # invoices, VAT, pricing, finance and validation tools
 app.include_router(music_router, dependencies=auth)
 app.include_router(own_router, dependencies=auth)  # self-hosted: lyrics, cards, fun, screenshot, removebg, tweet
 app.include_router(youtube_router, dependencies=auth)  # self-hosted YouTube: search / play / video / formats
