@@ -1,3 +1,5 @@
+<p align="center"><img src="static/brand/logo.svg" alt="Ladybug" height="64"></p>
+
 # Ladybug API
 
 FastAPI service with file, download and AI endpoints. Auth: `X-API-Key` header on all `/v1` routes. Interactive docs at `/docs`.

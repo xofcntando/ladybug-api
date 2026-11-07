@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Ladybug"><defs>
+<radialGradient id="shellf" cx="38%" cy="30%" r="80%"><stop offset="0" stop-color="#F2566A"/><stop offset=".55" stop-color="#D62839"/><stop offset="1" stop-color="#A91628"/></radialGradient>
+<clipPath id="clipf"><circle cx="32" cy="37" r="24"/></clipPath></defs>
+<path d="M25.5 11.5C23.5 6 19.5 4.2 14.5 5" fill="none" stroke="#14110F" stroke-width="2.6" stroke-linecap="round"/>
+<path d="M38.5 11.5C40.5 6 44.5 4.2 49.5 5" fill="none" stroke="#14110F" stroke-width="2.6" stroke-linecap="round"/>
+<circle cx="32" cy="37" r="24" fill="url(#shellf)"/>
+<g clip-path="url(#clipf)">
+<path d="M32 22V62" stroke="#14110F" stroke-width="2.8"/>
+<circle cx="21.5" cy="35" r="4.8" fill="#14110F"/><circle cx="23.5" cy="49" r="3.6" fill="#14110F"/>
+<circle cx="42.5" cy="33.5" r="4" fill="#14110F"/><circle cx="41.5" cy="46.5" r="4.6" fill="#14110F"/>
+<path d="M13 40C11.5 30 17 21.5 25 19" fill="none" stroke="#fff" stroke-opacity=".28" stroke-width="2.4" stroke-linecap="round"/>
+</g>
+<path d="M18 22.5C18 13.5 24.5 9 32 9s14 4.5 14 13.5C42 20.5 37 19.6 32 19.6S22 20.5 18 22.5Z" fill="#14110F"/>
+<circle cx="26.2" cy="15.2" r="1.7" fill="#fff"/><circle cx="37.8" cy="15.2" r="1.7" fill="#fff"/></svg>

@@ -334,7 +334,7 @@ const TOOLS = [
 
 /* ---------- ui ---------- */
 let current;
-const COLLAPSED = new Set((() => { try { return JSON.parse(localStorage.getItem('lb_collapsed') || '[]'); } catch { return []; } })());
+const COLLAPSED = new Set((() => { try { const v = localStorage.getItem('lb_collapsed'); return v === null ? TOOLS.map(t => t.g) : JSON.parse(v); } catch { return []; } })());
 let NAVQ = '';
 function buildNav() {
   const nav = $('#nav');
@@ -378,8 +378,76 @@ function buildNav() {
   renderList();
   nav._render = renderList;
 }
+
+const MARK = (px, cls = 'mark') => `<svg class="${cls}" width="${px}" height="${px}" aria-hidden="true"><use href="#lb-mark"/></svg>`;
+const GROUP_INFO = {
+  Media: 'Download audio or video from YouTube, TikTok, Instagram and more', AI: 'Chat, summaries, copy, translation, images and speech',
+  Business: 'VAT, pricing, loans, barcodes, invoices and shop maths', Anime: 'Search, discover, cast, schedules, images and reactions',
+  Images: 'Edit, convert and pull colours from any image', Scrape: 'Pull text, products and data out of web pages', SEO: 'Audit a page and hunt broken links',
+  Files: 'Store, list and fetch your files', Music: 'Free, licensed music to search and download', Utilities: 'Email checks, DNS, currency and hashes',
+  'Dev tools': 'Encoders, formatters, regex, JWT, diffs and more', 'Web check': 'Status, headers, robots.txt and SSL for any site',
+  Jobs: 'Search remote job boards and read the market', Info: 'Weather, holidays, crypto, wiki, books and local time',
+  More: 'Lyrics, screenshots, cutouts, cards and fun', Cards: 'Welcome and goodbye cards for your community', Account: 'Your usage and downloader health',
+};
+const FEATURED = new Set(['Media', 'AI', 'Business', 'Anime']);
+const QUICK = [['dl', 'Download a video'], ['x-rmbg', 'Remove a background'], ['i-weather', 'Weather'], ['b-inv', 'Build an invoice'], ['a-rec', 'Anime recommendations'], ['desc', 'Write a product description'], ['qr', 'Make a QR code']];
+function home() {
+  current = null;
+  history.replaceState(null, '', '#home');
+  const all = [...new Set(TOOLS.map(t => t.g))];
+  const groups = [...all.filter(g => FEATURED.has(g)), ...all.filter(g => !FEATURED.has(g))];
+  const input = el('input', { type: 'search', id: 'homeq', placeholder: 'What do you need? Try “vat”, “mp3” or “weather”', 'aria-label': 'Find a tool', autocomplete: 'off', spellcheck: 'false' });
+  const body = el('div');
+  const open1 = id => { open(id); };
+  const draw = () => {
+    const q = input.value.trim().toLowerCase();
+    body.replaceChildren();
+    if (q) {
+      const hits = TOOLS.filter(t => (t.name + ' ' + t.g + ' ' + (t.desc || '')).toLowerCase().includes(q)).slice(0, 12);
+      body.append(hits.length ? el('div', { class: 'results' }, hits.map((t, i) => el('button', { class: 'res' + (i ? '' : ' sel'), type: 'button', onclick: () => open1(t.id) }, el('b', {}, t.name), el('span', {}, t.desc || ''), el('i', {}, t.g))))
+        : el('div', { class: 'empty' }, `Nothing matches “${input.value.trim()}”. Try a shorter word.`));
+      return;
+    }
+    body.append(el('h2', {}, 'Browse by group'), el('div', { class: 'tiles' }, groups.map(g => {
+      const ts = TOOLS.filter(t => t.g === g);
+      return el('button', { class: 'tile' + (FEATURED.has(g) ? ' big' : ''), type: 'button', onclick: () => open1(ts[0].id) },
+        el('span', { class: 'th' }, el('b', {}, g), el('span', { class: 'n' }, ts.length + ' tools')),
+        el('p', {}, GROUP_INFO[g] || ts.slice(0, 3).map(t => t.name).join(', ')),
+        el('span', { class: 'ex' }, ts.slice(0, 3).map(t => t.name).join(' · ')));
+    })));
+    if (!getKey()) body.append(el('div', { class: 'keyhint' }, 'Paste your API key in the box at the top and press Save. Every tool on this page uses it.'));
+  };
+  input.addEventListener('input', draw);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const f = body.querySelector('.res'); if (f) f.click(); } });
+  const hero = el('div', { class: 'hero' },
+    el('div', {}, el('h1', {}, 'Find the tool, get the result.'),
+      el('p', { class: 'lede' }, `${TOOLS.length} tools across ${groups.length} groups, all behind one key. Search, or pick a group below.`),
+      el('div', { class: 'bigsearch', html: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>' }, input, el('span', { class: 'kbd' }, '/')),
+      el('div', { class: 'quick' }, QUICK.filter(([id]) => TOOLS.some(t => t.id === id)).map(([id, label]) => el('button', { type: 'button', onclick: () => open1(id) }, label)))),
+    el('span', { html: MARK(176, 'mark heromark') }));
+  $('#tool').replaceChildren(el('div', { class: 'home' }, hero, body));
+  document.querySelectorAll('nav button').forEach(b => b.removeAttribute('aria-current'));
+  if ($('#nav')._render) $('#nav')._render();
+  draw();
+}
+async function refreshUsage() {
+  const box = $('#usage');
+  if (!getKey()) { box.hidden = true; return; }
+  try {
+    const r = await fetch('/v1/account/usage', { headers: { 'X-API-Key': getKey() } });
+    if (!r.ok) { box.hidden = true; return; }
+    const u = await r.json();
+    box.hidden = false;
+    if (!u.enabled || !u.limit) { $('#usagenum').textContent = 'unlimited'; $('#usagebar').style.width = '0'; return; }
+    $('#usagenum').textContent = `${u.used.toLocaleString()} / ${u.limit.toLocaleString()} today`;
+    $('#usagebar').style.width = Math.min(100, Math.round(u.used / u.limit * 100)) + '%';
+    box.classList.toggle('warn', u.used / u.limit > 0.8);
+  } catch { box.hidden = true; }
+}
 function open(id) {
-  current = TOOLS.find(t => t.id === id) || TOOLS[0];
+  if (!id || id === 'home' || !TOOLS.some(t => t.id === id)) return home();
+  current = TOOLS.find(t => t.id === id);
+  COLLAPSED.delete(current.g);  // always show the group you are working in
   history.replaceState(null, '', '#' + current.id);
   document.querySelectorAll('nav button').forEach(b => b.setAttribute('aria-current', b.dataset.id === current.id));
   const vals = {}, wrap = {};
@@ -404,7 +472,7 @@ function open(id) {
     e.preventDefault();
     if (!getKey()) { out.replaceChildren(errBox('Add your API key', 'Paste it in the field at the top and press Save.')); $('#apikey').focus(); return; }
     CALLS = [];
-    btn.disabled = true; out.replaceChildren(el('div', { class: 'loading' }, el('i'), el('i'), el('i'), 'Working…'));
+    btn.disabled = true; out.replaceChildren(el('div', { class: 'loading' }, el('span', { class: 'crawl', html: MARK(22) }), 'Working…'));
     try {
       const { kind, data } = await current.run({ ...vals });
       const node = kind === 'files' ? await R.files() : R[kind](data);
@@ -412,7 +480,7 @@ function open(id) {
     } catch (err) {
       out.replaceChildren(errBox(err.status === 401 ? 'API key rejected' : 'Something went wrong', err.status === 401 ? 'Check the key in the Render dashboard: your service > Environment > API_KEYS.' : err.message), apiBox(CALLS.find(c => c.path.startsWith('/v1/'))));
     }
-    btn.disabled = false;
+    btn.disabled = false; refreshUsage();
   });
   refresh();
   $('#tool').replaceChildren(el('div', { class: 'toolhead' }, el('span', { class: 'crumb' }, current.g), el('h1', {}, current.name), el('p', {}, current.desc)), form, out);
@@ -437,7 +505,7 @@ const errBox = (t, m) => el('div', { class: 'card err' }, el('b', {}, t), m);
 /* key handling */
 async function checkKey(show) {
   const s = $('#keystate'); if (!getKey()) { s.textContent = ''; return; }
-  try { await api('/v1/files'); s.textContent = 'Key works'; s.className = 'keystate ok'; }
+  try { await api('/v1/files'); s.textContent = 'Key works'; s.className = 'keystate ok'; refreshUsage(); }
   catch (e) { s.textContent = e.status === 401 ? 'Key rejected' : 'Server error'; s.className = 'keystate bad'; }
 }
 /* ---------- toasts ---------- */
@@ -535,7 +603,7 @@ document.addEventListener('keydown', e => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); PAL.hidden ? openPal() : closePal(); return; }
   if (e.key === 'Escape' && !PAL.hidden) { closePal(); return; }
-  if (!typing && e.key === '/') { e.preventDefault(); $('#navq')?.focus(); return; }
+  if (!typing && e.key === '/') { e.preventDefault(); ($('#homeq') || $('#navq'))?.focus(); return; }
   if (!typing && e.key === '?') { e.preventDefault(); toast('Ctrl K search · / filter · Esc close'); }
 });
 
@@ -548,5 +616,5 @@ $('#keyform').addEventListener('submit', e => {
   toast(k ? 'API key saved' : 'API key cleared', k ? 'ok' : '');
   checkKey();
 });
-buildNav(); open(location.hash.slice(1)); checkKey();
+buildNav(); open(location.hash.slice(1)); checkKey(); refreshUsage();
 window.addEventListener('hashchange', () => open(location.hash.slice(1)));
