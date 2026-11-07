@@ -1,4 +1,3 @@
-import asyncio
 import io
 from typing import Literal
 
@@ -9,6 +8,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from pydantic import BaseModel, Field
 
 from .fetch import fetch_bytes
+from .limits import run_cpu
 from .storage import save
 
 Image.MAX_IMAGE_PIXELS = 25_000_000  # keeps a 512 MB free instance safe
@@ -52,12 +52,12 @@ async def load(url: str) -> Image.Image:
         except Exception:
             raise HTTPException(415, "Not a readable image")
         return ImageOps.exif_transpose(img)
-    return await asyncio.to_thread(decode)
+    return await run_cpu(decode)
 
 
 def work(fn, *args):
     """Run CPU-heavy Pillow work in a worker thread so one big image never blocks every other request."""
-    return asyncio.to_thread(fn, *args)
+    return run_cpu(fn, *args)
 
 
 def out(img: Image.Image, r: ImgReq, name: str = "image"):

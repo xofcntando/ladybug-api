@@ -9,8 +9,9 @@ def client() -> httpx.AsyncClient:
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
             timeout=httpx.Timeout(30, connect=10),
-            limits=httpx.Limits(max_connections=100, max_keepalive_connections=30, keepalive_expiry=60),
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=30, keepalive_expiry=30),
             follow_redirects=False,
+            transport=httpx.AsyncHTTPTransport(retries=2),  # retries *connection* failures only (safe for POST too)
         )
     return _client
 

@@ -2,16 +2,16 @@
 Order: AI_PROVIDER (if set) -> Groq (fastest) -> Gemini -> OpenAI -> Anthropic -> Pollinations (keyless, rate limited).
 If a provider errors or times out, the next configured one is tried, so one bad key does not break every AI endpoint."""
 import hashlib
-import time
 
 import httpx
 from fastapi import HTTPException
 
 from . import config
+from .cache import TTLCache
 from .http import client
 
-_cache: dict[str, tuple[float, dict]] = {}
 _CACHE_TTL = 600
+_cache = TTLCache(maxsize=500, ttl=_CACHE_TTL)
 
 
 def _err(provider: str, r: httpx.Response) -> HTTPException:
@@ -116,8 +116,8 @@ async def complete(prompt: str, system: str = "", max_tokens: int = 1024, temper
     if temperature <= 0.2:  # near-deterministic requests (translate, classify...) are safe to cache
         ck = hashlib.sha1(f"{prompt}\0{system}\0{max_tokens}\0{temperature}".encode()).hexdigest()
         hit = _cache.get(ck)
-        if hit and hit[0] > time.monotonic():
-            return {**hit[1], "cached": True}
+        if hit is not None:
+            return {**hit, "cached": True}
     last: HTTPException | None = None
     for name in _chain():
         fn = _IMPL.get(name, _pollinations)
@@ -133,8 +133,6 @@ async def complete(prompt: str, system: str = "", max_tokens: int = 1024, temper
             last = HTTPException(502, f"AI provider {name} returned an empty reply")
             continue
         if ck:
-            if len(_cache) > 500:
-                _cache.clear()
-            _cache[ck] = (time.monotonic() + _CACHE_TTL, out)
+            _cache.set(ck, out)
         return out
     raise last or HTTPException(503, "No AI provider available")

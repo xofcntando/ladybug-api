@@ -48,4 +48,5 @@ fi
 exec uvicorn app.main:app \
   --host 0.0.0.0 --port "$APP_PORT" \
   --proxy-headers --forwarded-allow-ips '*' \
-  --timeout-keep-alive 75 --no-access-log
+  --timeout-keep-alive 75 --no-access-log \
+  --timeout-graceful-shutdown 20 --backlog 256

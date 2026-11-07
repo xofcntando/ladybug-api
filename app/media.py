@@ -1,6 +1,7 @@
 """Media downloader (ytmp3 / ytmp4 / TikTok / Instagram / ...) built on yt-dlp.
 Only an allowlist of hosts is accepted so the endpoint cannot be used to probe internal networks."""
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import re
 import shutil
@@ -17,11 +18,29 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
 from . import config, knight, ytfallback, ytdlp_update
+from .cache import TTLCache, singleflight
 from .security import assert_public_url
 from .storage import meta_path, save_path
 
 router = APIRouter(prefix="/v1/media", tags=["media"])
 _sem = asyncio.Semaphore(config.MEDIA_CONCURRENCY)  # one download at a time by default: protects small instances
+
+
+@asynccontextmanager
+async def _slot():
+    """Wait for a download slot, but never longer than MEDIA_QUEUE_WAIT seconds.
+
+    Without a bound, a queue of slow downloads makes later callers hang until the platform's proxy times out
+    (a confusing 502/504). A fast, honest 503 + Retry-After lets the client back off and retry.
+    """
+    try:
+        await asyncio.wait_for(_sem.acquire(), timeout=config.MEDIA_QUEUE_WAIT)
+    except asyncio.TimeoutError:
+        raise HTTPException(503, "Download queue is full, retry shortly", headers={"Retry-After": "20"})
+    try:
+        yield
+    finally:
+        _sem.release()
 
 ALLOWED = ("youtube.com", "youtu.be", "youtube-nocookie.com", "tiktok.com", "instagram.com", "facebook.com", "fb.watch",
            "twitter.com", "x.com", "soundcloud.com", "vimeo.com", "dailymotion.com", "reddit.com", "pinterest.com", "twitch.tv")
@@ -416,12 +435,18 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
     await _check_url(url)
     url = knight.canonical(url)
     key = (url, kind, quality if kind == "video" else 0, kbps if kind == "audio" else 0)
-    if (hit := _reusable(key)):  # same video asked again: serve the stored file, no upstream request
+    def _served(hit):
         info, f = hit
         if stream:
             return FileResponse(meta_path(f["id"])[1], media_type=f["content_type"], filename=f["filename"])
         return {"success": True, "type": kind, **_brief(info), "file": f, "expires_in_minutes": config.MEDIA_TTL_MINUTES, "cached": True}
-    async with _sem:
+
+    if (hit := _reusable(key)):  # same video asked again: serve the stored file, no upstream request
+        return _served(hit)
+    async with _slot():
+        # Someone else may have finished this exact download while we waited in the queue.
+        if (hit := _reusable(key)):
+            return _served(hit)
         info = path = None
         knight.last_error = None
         errors: list[str] = []
@@ -484,7 +509,7 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
     return {"success": True, "type": kind, **_brief(info), "file": f, "expires_in_minutes": config.MEDIA_TTL_MINUTES}
 
 
-_info_cache: dict[str, tuple[float, dict]] = {}
+_info_cache = TTLCache(maxsize=100, ttl=600)
 
 
 @router.get("/info")
@@ -492,12 +517,10 @@ async def info(url: str):
     """Metadata only (title, duration, thumbnail, available heights)."""
     await _check_url(url)
     url = knight.canonical(url)
-    hit = _info_cache.get(url)
-    if hit and hit[0] > time.monotonic():
-        i = hit[1]
-    else:
+    i = _info_cache.get(url)
+    if i is None:
         try:
-            i = await asyncio.wait_for(asyncio.to_thread(_info, url), timeout=60)
+            i = await singleflight(("info", url), lambda: asyncio.wait_for(asyncio.to_thread(_info, url), timeout=60))
         except (asyncio.TimeoutError, HTTPException, Exception) as e:  # noqa: BLE001
             if knight.is_youtube(url):  # blocked or slow: oEmbed still gives title / channel / thumbnail from any IP
                 try:
@@ -520,9 +543,7 @@ async def info(url: str):
             if isinstance(e, asyncio.TimeoutError):
                 raise HTTPException(504, "Timed out fetching video info")
             raise e if isinstance(e, HTTPException) else _err(e, url)
-        if len(_info_cache) > 100:
-            _info_cache.clear()
-        _info_cache[url] = (time.monotonic() + 600, i)
+        _info_cache.set(url, i)
     heights = sorted({f["height"] for f in i.get("formats", []) if f.get("height") and f["height"] >= 144 and f.get("vcodec") not in (None, "none")})
     return {**_brief(i), "heights": heights, "is_live": i.get("is_live")}
 

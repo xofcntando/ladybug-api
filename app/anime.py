@@ -10,24 +10,21 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
+from .cache import TTLCache
 from .http import client
 from .security import assert_public_url
 
 router = APIRouter(prefix="/v1/anime", tags=["anime"])
 UA = {"User-Agent": "LadybugAPI/1.1 (anime module)"}
-_cache: dict[str, tuple[float, object]] = {}
+_cache = TTLCache(maxsize=1000)
 
 
 def _cget(k):
-    h = _cache.get(k)
-    return h[1] if h and h[0] > time.monotonic() else None
+    return _cache.get(k)
 
 
 def _cset(k, v, ttl):
-    if len(_cache) > 1000:
-        _cache.clear()
-    _cache[k] = (time.monotonic() + ttl, v)
-    return v
+    return _cache.set(k, v, ttl)
 
 
 async def anilist(query: str, variables: dict, ttl: int = 600) -> dict:

@@ -2,13 +2,13 @@ import asyncio
 import hmac
 import ipaddress
 import socket
-import time
 from urllib.parse import urlparse
 
 from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader, APIKeyQuery
 
 from . import config
+from .cache import TTLCache
 
 
 _header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -28,8 +28,8 @@ async def require_key(h: str | None = Security(_header), q: str | None = Securit
 
 
 # host -> (expires_at, ok). Public DNS answers are cached briefly so repeated calls skip the lookup.
-_dns_cache: dict[str, tuple[float, bool]] = {}
 _DNS_TTL = 120
+_dns_cache = TTLCache(maxsize=2000, ttl=_DNS_TTL)
 
 
 def _is_public(ip_str: str) -> bool:
@@ -46,10 +46,9 @@ async def assert_public_url(url: str) -> None:
     if p.scheme not in ("http", "https") or not p.hostname:
         raise HTTPException(400, "Only http(s) URLs are allowed")
     host = p.hostname.lower()
-    now = time.monotonic()
     hit = _dns_cache.get(host)
-    if hit and hit[0] > now:
-        if not hit[1]:
+    if hit is not None:
+        if not hit:
             raise HTTPException(400, "URL points to a non-public address")
         return
     try:
@@ -58,8 +57,6 @@ async def assert_public_url(url: str) -> None:
     except socket.gaierror:
         raise HTTPException(400, "Cannot resolve host")
     ok = all(_is_public(i[4][0]) for i in infos)
-    if len(_dns_cache) > 2000:
-        _dns_cache.clear()
-    _dns_cache[host] = (now + _DNS_TTL, ok)
+    _dns_cache.set(host, ok)
     if not ok:
         raise HTTPException(400, "URL points to a non-public address")

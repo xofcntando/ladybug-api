@@ -99,8 +99,12 @@ counts), and live TLS certificate details (issuer, validity, days left, SANs, TL
 Everything except text AI works out of the box. AI endpoints fall back automatically: text -> Pollinations (keyless, but only 1 request / 45 s per IP), images -> Pollinations Flux, speech -> Microsoft Edge neural voices (any voice name, e.g. `hu-HU-NoemiNeural`), moderation -> the text model.
 For fast AI add a free `GROQ_API_KEY` (fastest) or `GEMINI_API_KEY`. If several keys are set they are tried in order (Groq, Gemini, OpenAI, Anthropic) and a failing provider falls through to the next. `AI_PROVIDER` forces the first choice.
 
-## Performance
-Shared HTTP connection pool, async DNS (cached), 60 s page cache, cached DNS/currency/AI (deterministic) results, CPU work in threads, lxml parsing, and a self-ping so the free Render instance does not fall asleep (set `SELF_PING=0` to disable).
+## Performance and reliability
+- **Speed:** shared HTTP pool with connect retries, async DNS (cached), bounded LRU caches (`app/cache.py`) instead of "clear everything when full", identical concurrent requests share one upstream call (page fetches, video info), gzip for JSON/text, O(1) per-request rate limiting, CPU work in threads, lxml parsing, and a self-ping so the free Render instance does not fall asleep (`SELF_PING=0` to disable).
+- **Bounded resources:** downloads wait at most `MEDIA_QUEUE_WAIT` s (default 30) for a slot, then get `503` + `Retry-After` instead of hanging until the proxy times out. Chromium pages (`BROWSER_CONCURRENCY`, default 2) and image rendering (`CPU_CONCURRENCY`, default 2) are capped so a burst cannot OOM a 512 MB instance. Background removal runs on a downscaled mask, so a 12 MP photo takes about a second instead of minutes.
+- **Safety:** `/v1/dev/regex` has a hard 2 s timeout (stdlib `re` can freeze the whole server on patterns like `(a|aa)+$`); `/v1/image/removebg` re-checks every redirect hop against private addresses; file writes are atomic; transient DNS failures are no longer cached as "no MX record".
+- **Observability:** every response has `X-Request-ID` and `X-Process-Time` (ms); requests slower than `SLOW_REQUEST_SECONDS` (default 8) are logged; unhandled errors return JSON with the request id. `/health` is the cheap liveness probe, `/ready` checks storage and disk.
+- **Tests:** `pip install -r requirements-dev.txt && pytest tests`. CI runs them on every push.
 
 ## Deploy on Render
 1. Push this folder to a GitHub repo.
