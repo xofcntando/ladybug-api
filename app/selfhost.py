@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 from fastapi import HTTPException
 from PIL import Image, ImageDraw, ImageFilter
 
+from . import config
 from .cards import _circle, _font, _letter_avatar
 from .security import assert_public_url
 
@@ -36,6 +37,7 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, lik
 
 _browser = None
 _browser_lock = asyncio.Lock()
+_pages = asyncio.Semaphore(config.BROWSER_CONCURRENCY)  # each Chromium context costs ~100+ MB: bound it or the instance OOMs
 
 
 async def _get_browser():
@@ -82,6 +84,19 @@ async def screenshot(url: str, width: int = 1280, height: int = 800, full_page: 
                      fmt: Literal["png", "jpeg"] = "png", quality: int = 85) -> tuple[bytes, str]:
     """Render a public page and return (image_bytes, media_type)."""
     await assert_public_url(url)
+    try:
+        await asyncio.wait_for(_pages.acquire(), timeout=20)
+    except asyncio.TimeoutError:
+        raise HTTPException(503, "Screenshot engine is busy, retry shortly", headers={"Retry-After": "10"})
+    try:
+        return await asyncio.wait_for(_screenshot(url, width, height, full_page, theme, delay, fmt, quality), timeout=55)
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "Screenshot timed out")
+    finally:
+        _pages.release()
+
+
+async def _screenshot(url, width, height, full_page, theme, delay, fmt, quality) -> tuple[bytes, str]:
     browser = await _get_browser()
     ctx = await browser.new_context(
         viewport={"width": width, "height": height},
@@ -118,6 +133,9 @@ async def screenshot(url: str, width: int = 1280, height: int = 800, full_page: 
 
 # ------------------------------------------------------------------ 2. remove background
 
+_MAX_FILL_SIDE = 1200
+
+
 def _dist(a: tuple[int, int, int], b: tuple[int, int, int]) -> int:
     return abs(a[0] - b[0]) + abs(a[1] - b[1]) + abs(a[2] - b[2])
 
@@ -130,6 +148,12 @@ def _flood_alpha(img: Image.Image, tolerance: int) -> Image.Image:
     touching the border are cleared.
     """
     img = img.convert("RGB")
+    full_size = img.size
+    # The flood fill is pure Python (~1 µs/pixel and up): a 20 MP photo used to pin a CPU for minutes. The mask is
+    # smooth by construction, so compute it on a downscaled copy and scale it back up.
+    if max(img.size) > _MAX_FILL_SIDE:
+        img = img.copy()
+        img.thumbnail((_MAX_FILL_SIDE, _MAX_FILL_SIDE), Image.BILINEAR)
     w, h = img.size
     px = img.load()
     corners = [px[0, 0], px[w - 1, 0], px[0, h - 1], px[w - 1, h - 1]]
@@ -174,6 +198,8 @@ def _flood_alpha(img: Image.Image, tolerance: int) -> Image.Image:
     # shrink the hole a pixel so edge halos go away, then soften the cut
     mask = mask.filter(ImageFilter.MinFilter(3))
     mask = mask.filter(ImageFilter.GaussianBlur(1.2))
+    if mask.size != full_size:
+        mask = mask.resize(full_size, Image.BILINEAR)
     return mask
 
 

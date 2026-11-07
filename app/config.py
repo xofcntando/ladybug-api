@@ -44,3 +44,6 @@ SELF_PING = os.getenv("SELF_PING", "1") != "0"               # keep a free Rende
 MEDIA_CONCURRENCY = max(1, int(os.getenv("MEDIA_CONCURRENCY", "1")))
 YTDLP_FRAGMENTS = max(1, int(os.getenv("YTDLP_FRAGMENTS", "2")))
 POT_MAX_HEAP_MB = int(os.getenv("POT_MAX_HEAP_MB", "160"))
+MEDIA_QUEUE_WAIT = float(os.getenv("MEDIA_QUEUE_WAIT", "30"))   # max seconds a download request waits for a free slot before a 503
+BROWSER_CONCURRENCY = max(1, int(os.getenv("BROWSER_CONCURRENCY", "2")))  # parallel Chromium pages (screenshots)
+CPU_CONCURRENCY = max(1, int(os.getenv("CPU_CONCURRENCY", "2")))         # parallel image-processing jobs

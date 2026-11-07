@@ -9,3 +9,5 @@ __pycache__/
 # exported cookie jars (secrets)
 cookies.txt
 *.cookies.txt
+.pytest_cache/
+__pycache__/

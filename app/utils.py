@@ -9,6 +9,7 @@ import dns.resolver
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from .cache import TTLCache
 from .http import client
 
 router = APIRouter(prefix="/v1/utils", tags=["utils"])
@@ -16,22 +17,22 @@ EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 DISPOSABLE = {"mailinator.com", "10minutemail.com", "guerrillamail.com", "tempmail.com", "yopmail.com", "trashmail.com"}
 
 
-_dns_cache: dict[tuple[str, str], tuple[float, list[str]]] = {}
+_dns_cache = TTLCache(maxsize=1000, ttl=300)
 
 
 def _dns(name: str, rtype: str) -> list[str]:
     key = (name.lower(), rtype)
     hit = _dns_cache.get(key)
-    if hit and hit[0] > time.monotonic():
-        return hit[1]
+    if hit is not None:
+        return hit
     try:
         ans = dns.resolver.resolve(name, rtype, lifetime=4)
         res = sorted(str(a).strip('"') for a in ans)
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
+        res = []  # a real "no such record" answer: safe to remember
     except Exception:
-        res = []
-    if len(_dns_cache) > 1000:
-        _dns_cache.clear()
-    _dns_cache[key] = (time.monotonic() + 300, res)
+        return []  # timeout / network blip: answer empty now but do NOT cache it for 5 minutes
+    _dns_cache.set(key, res)
     return res
 
 

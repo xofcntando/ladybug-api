@@ -16,7 +16,6 @@ import os
 import re
 import shutil
 import tempfile
-import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -26,6 +25,7 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
 from . import config
+from .cache import TTLCache
 from .http import client
 from .security import assert_public_url
 from .storage import save_path
@@ -38,19 +38,15 @@ SOURCES = ["archive", "ccmixter", "openverse", "audius"] + (["jamendo"] if JAMEN
 AUDIO_EXT = {"mp3": "audio/mpeg", "ogg": "audio/ogg", "oga": "audio/ogg", "flac": "audio/flac", "wav": "audio/wav",
              "m4a": "audio/mp4", "opus": "audio/ogg"}
 _sem = asyncio.Semaphore(3)
-_cache: dict[str, tuple[float, object]] = {}
+_cache = TTLCache(maxsize=500)
 
 
 def _cget(k):
-    h = _cache.get(k)
-    return h[1] if h and h[0] > time.monotonic() else None
+    return _cache.get(k)
 
 
 def _cset(k, v, ttl=600):
-    if len(_cache) > 500:
-        _cache.clear()
-    _cache[k] = (time.monotonic() + ttl, v)
-    return v
+    return _cache.set(k, v, ttl)
 
 
 async def _json(url: str, params: dict | None = None, timeout: int = 25):

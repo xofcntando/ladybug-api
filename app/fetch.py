@@ -1,9 +1,10 @@
-import time
+import asyncio
 
 import httpx
 from fastapi import HTTPException
 
 from . import config
+from .cache import TTLCache, singleflight
 from .http import client
 from .security import assert_public_url
 
@@ -19,7 +20,7 @@ BOT_UA = "Mozilla/5.0 (compatible; LadybugBot/1.0; +https://ladybug-api-e8q8.onr
 
 _CACHE_TTL = 60
 _CACHE_MAX_BYTES = 2 * 1024 * 1024
-_cache: dict[str, tuple[float, tuple]] = {}
+_cache = TTLCache(maxsize=200, ttl=_CACHE_TTL)
 
 
 async def _once(url: str, headers: dict) -> tuple[bytes, str, str, str]:
@@ -42,33 +43,43 @@ async def _once(url: str, headers: dict) -> tuple[bytes, str, str, str]:
     raise HTTPException(400, "Too many redirects")
 
 
+async def _fetch_uncached(url: str, headers: dict | None) -> tuple[bytes, str, str, str]:
+    h = {**BROWSER_HEADERS, **(headers or {})}
+    last: Exception | None = None
+    for attempt in range(2):  # one quick retry for transient network blips (never for HTTP errors)
+        try:
+            return await _once(url, h)
+        except HTTPException as e:
+            # Some sites block browser-looking clients but allow honest bots (and vice versa): retry once on 403/429/503.
+            if e.status_code == 502 and any(f"returned {s}" in str(e.detail) for s in (403, 429, 503)):
+                try:
+                    return await _once(url, {**h, "User-Agent": BOT_UA})
+                except HTTPException:
+                    raise e
+            raise
+        except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError, httpx.ConnectTimeout) as e:
+            last = e
+            await asyncio.sleep(0.3)
+        except httpx.TimeoutException as e:
+            raise HTTPException(504, f"Remote did not respond ({type(e).__name__})")
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"Remote fetch failed ({type(e).__name__})")
+    if isinstance(last, (httpx.ConnectError, httpx.ConnectTimeout)):
+        raise HTTPException(504, f"Remote did not respond ({type(last).__name__})")
+    raise HTTPException(502, f"Remote fetch failed ({type(last).__name__})")
+
+
 async def fetch_bytes(url: str, headers: dict | None = None, cache: bool = True) -> tuple[bytes, str, str, str]:
     """Download a URL with SSRF checks on every redirect hop and a size cap.
-    Returns (data, content_type, filename, final_url). Small results are cached for 60s."""
+    Returns (data, content_type, filename, final_url). Small results are cached for 60s, and identical
+    concurrent requests share one upstream download."""
     key = url if not headers else ""
-    now = time.monotonic()
     if cache and key:
         hit = _cache.get(key)
-        if hit and hit[0] > now:
-            return hit[1]
-    h = {**BROWSER_HEADERS, **(headers or {})}
-    try:
-        res = await _once(url, h)
-    except HTTPException as e:
-        # Some sites block browser-looking clients but allow honest bots (and vice versa): retry once on 403/429/503.
-        if e.status_code == 502 and any(f"returned {s}" in str(e.detail) for s in (403, 429, 503)):
-            try:
-                res = await _once(url, {**h, "User-Agent": BOT_UA})
-            except HTTPException:
-                raise e
-        else:
-            raise
-    except (httpx.TimeoutException, httpx.ConnectError) as e:
-        raise HTTPException(504, f"Remote did not respond ({type(e).__name__})")
-    except httpx.HTTPError as e:
-        raise HTTPException(502, f"Remote fetch failed ({type(e).__name__})")
-    if cache and key and len(res[0]) <= _CACHE_MAX_BYTES:
-        if len(_cache) > 200:
-            _cache.clear()
-        _cache[key] = (now + _CACHE_TTL, res)
-    return res
+        if hit is not None:
+            return hit
+        res = await singleflight(("fetch", key), lambda: _fetch_uncached(url, headers))
+        if len(res[0]) <= _CACHE_MAX_BYTES:
+            _cache.set(key, res)
+        return res
+    return await _fetch_uncached(url, headers)

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from urllib.parse import quote, unquote
 
+import regex
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -328,23 +329,28 @@ def regex_test(r: TextReq, pattern: str = Query(..., max_length=2000),
                ignore_case: bool = False, multiline: bool = False, dotall: bool = False,
                limit: int = Query(100, ge=1, le=1000)):
     """Test a regular expression against text. Returns matches (with groups) and counts."""
-    flags = 0
+    # `regex` (a drop-in superset of `re`) supports a hard timeout. With stdlib `re`, a pattern like (a+)+$ holds the
+    # GIL in C code and freezes the *entire* server for as long as it backtracks, so one request could take the API down.
+    flags = regex.VERSION0
     if ignore_case:
-        flags |= re.I
+        flags |= regex.I
     if multiline:
-        flags |= re.M
+        flags |= regex.M
     if dotall:
-        flags |= re.S
+        flags |= regex.S
     try:
-        rx = re.compile(pattern, flags)
-    except re.error as e:
+        rx = regex.compile(pattern, flags)
+    except regex.error as e:
         raise HTTPException(400, f"Invalid regex: {e}")
     matches = []
-    for m in rx.finditer(r.text):
-        matches.append({"match": m.group(0), "start": m.start(), "end": m.end(),
-                        "groups": list(m.groups())})
-        if len(matches) >= limit:
-            break
+    try:
+        for m in rx.finditer(r.text, timeout=2.0):
+            matches.append({"match": m.group(0), "start": m.start(), "end": m.end(),
+                            "groups": list(m.groups())})
+            if len(matches) >= limit:
+                break
+    except TimeoutError:
+        raise HTTPException(400, "Regex took too long (over 2 s): simplify the pattern or avoid nested quantifiers like (a+)+")
     return {"pattern": pattern, "valid": True, "count": len(matches), "matches": matches}
 
 

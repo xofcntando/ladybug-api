@@ -7,9 +7,10 @@ import re
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -32,7 +33,8 @@ from .scrape import router as scrape_router
 from .devtools import router as dev_router
 from .webcheck import router as web_router
 from .security import require_key
-from .ratelimit import limit_middleware, router as account_router
+from .observability import ObservabilityMiddleware, log
+from .ratelimit import RateLimitMiddleware, router as account_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -74,29 +76,26 @@ async def _keep_awake(url: str):
         await asyncio.sleep(600)
 
 
-app = FastAPI(title="Ladybug API", version="1.1.0", lifespan=lifespan,
+app = FastAPI(title="Ladybug API", version="1.2.0", lifespan=lifespan,
               description="Download, file and AI APIs. Send X-API-Key on every /v1 request.")
-app.middleware("http")(limit_middleware)  # per-API-key daily quota (DAILY_REQUEST_LIMIT, default 100000)
+# Order matters: the LAST one added is the outermost. Request flow: Observability -> CORS -> GZip -> RateLimit -> app.
+app.add_middleware(RateLimitMiddleware)  # per-API-key daily quota (DAILY_REQUEST_LIMIT, default 100000)
+app.add_middleware(GZipMiddleware, minimum_size=1024)  # JSON/text shrink 5-10x; images/video/audio are excluded by default
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
                    expose_headers=["Content-Disposition", "X-RateLimit-Limit", "X-RateLimit-Remaining",
-                                   "X-RateLimit-Reset", "Retry-After"])
+                                   "X-RateLimit-Reset", "Retry-After", "X-Request-ID", "X-Process-Time"])
+app.add_middleware(ObservabilityMiddleware)
 
 
-@app.middleware("http")
-async def fresh_html(request, call_next):
-    """Never let a browser or CDN serve a stale console page.
+@app.exception_handler(Exception)
+async def unhandled(request: Request, exc: Exception):
+    """Never leak a stack trace or a bare text/plain 500: always JSON, always with an id to find it in the logs."""
+    rid = request.scope.get("request_id", "-")
+    log.error("unhandled %s %s [%s]: %r", request.method, request.url.path, rid, exc, exc_info=exc)
+    return JSONResponse({"detail": "Internal server error", "request_id": rid}, status_code=500,
+                        headers={"X-Request-ID": rid})
 
-    The UI is a single-page console that changes often; caching index.html is
-    what makes a deploy look like it "didn't pick up the latest update".
-    Assets keep their ETag/Last-Modified validators so they still revalidate cheaply.
-    """
-    response = await call_next(request)
-    path = request.url.path
-    if path in ("/", "/ui", "/ui/") or path.endswith(".html"):
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-    return response
+
 auth = [Depends(require_key)]
 app.include_router(scrape_router, dependencies=auth)
 app.include_router(image_router, dependencies=auth)
@@ -127,7 +126,29 @@ async def root():
 
 @app.get("/health")
 async def health():
+    """Liveness: must stay instant and dependency-free (it is what the platform restarts us on)."""
     return {"status": "ok"}
+
+
+@app.get("/ready", include_in_schema=False)
+async def ready():
+    """Readiness: can we actually write files, and is the disk not nearly full? 503 tells a monitor *why*."""
+    import shutil
+    try:
+        free_mb = shutil.disk_usage(config.STORAGE_DIR).free // 1048576
+        probe = config.STORAGE_DIR / ".ready"
+        probe.write_text("ok")
+        probe.unlink(missing_ok=True)
+    except OSError as e:
+        return JSONResponse({"status": "unavailable", "storage": f"not writable ({type(e).__name__})"}, status_code=503)
+    if free_mb < 20:
+        return JSONResponse({"status": "unavailable", "storage": f"only {free_mb} MB free"}, status_code=503)
+    return {"status": "ok", "free_mb": free_mb, "browser": _browser_up()}
+
+
+def _browser_up() -> bool:
+    from . import selfhost
+    return selfhost._browser is not None and selfhost._browser.is_connected()
 
 
 # ---------------------------------------------------------------- files ----
@@ -139,7 +160,7 @@ _save = save
 async def upload_file(file: UploadFile = File(...)):
     """Upload a file; returns its id and download path."""
     data = await file.read(config.MAX_FILE_BYTES + 1)
-    return _save(data, file.filename or "file", file.content_type or "application/octet-stream")
+    return await asyncio.to_thread(_save, data, file.filename or "file", file.content_type or "application/octet-stream")
 
 
 @app.get("/v1/files", dependencies=auth, tags=["files"])
@@ -199,7 +220,7 @@ async def _fetch(url: str) -> tuple[bytes, str, str]:
 async def fetch_and_store(req: FetchReq):
     """Download a remote URL server-side and store it. Returns file id + download path."""
     data, ctype, name = await _fetch(req.url)
-    return _save(data, req.filename or name, ctype)
+    return await asyncio.to_thread(_save, data, req.filename or name, ctype)
 
 
 @app.get("/v1/download/proxy", dependencies=auth, tags=["download"])

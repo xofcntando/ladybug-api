@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from pydantic import BaseModel, Field
 
 from .fetch import fetch_bytes
+from .limits import run_cpu
 from .storage import save
 
 router = APIRouter(prefix="/v1", tags=["cards"])
@@ -188,7 +189,7 @@ async def _opt(url: str | None, limit_mb: int = 8) -> bytes | None:
 
 async def _make(kind: str, r: CardReq):
     av, bg = await asyncio.gather(_opt(r.avatar), _opt(r.background))
-    png = await asyncio.to_thread(render, kind, r, av, bg)
+    png = await run_cpu(render, kind, r, av, bg)
     mime = f"image/{r.format}"
     if r.store:
         return save(png, f"{kind}.{r.format}", mime)

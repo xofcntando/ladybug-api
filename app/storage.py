@@ -32,10 +32,20 @@ def save(data: bytes, filename: str, content_type: str) -> dict:
         raise HTTPException(413, f"File exceeds {config.MAX_FILE_BYTES // 1048576} MB limit")
     fid = uuid.uuid4().hex
     mp, bp = meta_path(fid)
-    bp.write_bytes(data)
     meta = {"id": fid, "filename": filename, "content_type": content_type, "size": len(data),
             "download_url": file_url(fid)}
-    mp.write_text(json.dumps(meta))
+    # Write to temp names and rename: a crash or a concurrent cleanup() never sees a half-written .bin/.json pair,
+    # and the .json (what makes a file "exist") only appears after the data is fully on disk.
+    tmp_b, tmp_m = bp.with_suffix(".bin.tmp"), mp.with_suffix(".json.tmp")
+    try:
+        tmp_b.write_bytes(data)
+        os.replace(tmp_b, bp)
+        tmp_m.write_text(json.dumps(meta))
+        os.replace(tmp_m, mp)
+    except OSError:
+        for f in (tmp_b, tmp_m, bp):
+            f.unlink(missing_ok=True)
+        raise HTTPException(507, "Storage is full or not writable")
     return meta
 
 

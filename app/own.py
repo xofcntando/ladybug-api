@@ -5,7 +5,6 @@ import asyncio
 import io
 import random
 import re
-import time
 from typing import Literal
 from urllib.parse import quote
 
@@ -15,24 +14,22 @@ from fastapi.responses import Response
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 from .cards import _circle, _fit, _font, _letter_avatar, _opt
+from .cache import TTLCache
+from .fetch import fetch_bytes
 from .http import client
-from .security import assert_public_url
+from .limits import run_cpu
 
 router = APIRouter(tags=["own"])
 UA = {"User-Agent": "LadybugAPI/1.2 (+https://github.com/xofcntando/ladybug-api)", "Accept": "application/json"}
-_cache: dict[str, tuple[float, object]] = {}
+_cache = TTLCache(maxsize=500)
 
 
 def _cget(k):
-    h = _cache.get(k)
-    return h[1] if h and h[0] > time.monotonic() else None
+    return _cache.get(k)
 
 
 def _cset(k, v, ttl=3600):
-    if len(_cache) > 500:
-        _cache.clear()
-    _cache[k] = (time.monotonic() + ttl, v)
-    return v
+    return _cache.set(k, v, ttl)
 
 
 async def _get(url, params=None, timeout=15):
@@ -337,7 +334,7 @@ async def card_rank(name: str = Query("Member", max_length=40), pic: str | None 
                     theme: Literal["dark", "light"] = "dark"):
     """Rank / XP progress card (934x282 PNG) drawn by Ladybug."""
     av = await _opt(pic)
-    return _img(await asyncio.to_thread(_rank, name, av, level, xp, needed, rank, theme == "dark"))
+    return _img(await run_cpu(_rank, name, av, level, xp, needed, rank, theme == "dark"))
 
 
 @router.get("/v1/cards/quote", tags=["own"])
@@ -345,7 +342,7 @@ async def card_quote(text: str = Query(..., min_length=1, max_length=400), autho
                      pic: str | None = None, theme: Literal["dark", "light"] = "dark"):
     """Quote card (1024x512 PNG) with optional author photo."""
     av = await _opt(pic)
-    return _img(await asyncio.to_thread(_quote, text, author, av, theme == "dark"))
+    return _img(await run_cpu(_quote, text, author, av, theme == "dark"))
 
 
 @router.get("/v1/cards/wanted", tags=["own"])
@@ -353,7 +350,7 @@ async def card_wanted(name: str = Query("Unknown", max_length=40), pic: str | No
                       crime: str = Query("Too many puns", max_length=120), reward: str = Query("$10,000", max_length=20)):
     """Old-west wanted poster (800x1100 PNG)."""
     av = await _opt(pic)
-    return _img(await asyncio.to_thread(_wanted, name, av, crime, reward))
+    return _img(await run_cpu(_wanted, name, av, crime, reward))
 
 
 @router.get("/v1/cards/jail", tags=["own"])
@@ -362,7 +359,7 @@ async def card_jail(name: str = Query("Unknown", max_length=40), pic: str | None
                     cell: str = Query("A-12", max_length=10)):
     """Black-and-white mugshot behind cell bars with a name plate (700x930 PNG)."""
     av = await _opt(pic)
-    return _img(await asyncio.to_thread(_jail, name, av, crime, sentence, cell))
+    return _img(await run_cpu(_jail, name, av, crime, sentence, cell))
 
 
 # ---------------------------------------------------- 11-12. YouTube mock-ups
@@ -515,7 +512,7 @@ async def card_ytcard(url: str = Query(..., description="YouTube video link"),
     except Exception:  # noqa: BLE001  -- metadata enrichment is optional
         pass
     thumb = await _opt(meta.get("thumbnail"))
-    return _img(await asyncio.to_thread(_ytcard, meta, thumb, theme))
+    return _img(await run_cpu(_ytcard, meta, thumb, theme))
 
 
 @router.get("/v1/fake/ytcomment", tags=["own"])
@@ -526,7 +523,7 @@ async def fake_ytcomment(name: str = Query(..., min_length=1, max_length=60),
                          theme: Literal["dark", "light"] = "light"):
     """YouTube comment mock-up (PNG) drawn by Ladybug itself, no third-party API. For fun/design mock-ups only."""
     av = await _opt(pic)
-    return _img(await asyncio.to_thread(_ytcomment, name, text, av, likes, when, theme))
+    return _img(await run_cpu(_ytcomment, name, text, av, likes, when, theme))
 
 
 # ------------------------------------------------------------------ 11-13. screenshot / removebg / tweet
@@ -552,16 +549,10 @@ async def remove_bg(url: str = Query(..., description="Image URL"),
                     feather: int = Query(2, ge=0, le=12, description="Edge softness in pixels")):
     """Remove a flat/near-flat background and return a transparent PNG, done locally. No third-party API."""
     from .selfhost import remove_bg as _rm
-    await assert_public_url(url)
-    try:
-        r = await client().get(url, headers=UA, timeout=30, follow_redirects=True)
-    except httpx.HTTPError as e:
-        raise HTTPException(504, f"Image host unreachable ({type(e).__name__})")
-    if r.status_code >= 400:
-        raise HTTPException(502, f"Image host returned {r.status_code}")
-    if len(r.content) > 20 * 1024 * 1024:
-        raise HTTPException(413, "Image is larger than 20 MB")
-    return _img(await asyncio.to_thread(_rm, r.content, tolerance, feather))
+    # fetch_bytes re-checks every redirect hop against private addresses (follow_redirects=True here was an SSRF hole),
+    # streams with a hard size cap, and shares one download between identical concurrent requests.
+    data, _, _, _ = await fetch_bytes(url)
+    return _img(await run_cpu(_rm, data, tolerance, feather))
 
 
 @router.get("/v1/fake/tweet", tags=["own"])
@@ -578,5 +569,5 @@ async def fake_tweet(name: str = Query(..., min_length=1, max_length=60),
     """X/Twitter post mock-up (PNG) drawn by Ladybug itself, no third-party API. For fun/design mock-ups only."""
     from .selfhost import tweet_card
     av = await _opt(pic)
-    return _img(await asyncio.to_thread(tweet_card, name, username, text, av, verified,
+    return _img(await run_cpu(tweet_card, name, username, text, av, verified,
                                         likes, retweets, replies, when, theme))
