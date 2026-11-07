@@ -31,6 +31,12 @@ services:
         value: "150"
       - key: MIN_FREE_MB          # if free disk drops below this, all downloads are deleted
         value: "100"
+      - key: MONGODB_URI         # optional: MongoDB connection string. Keeps the daily quota across redeploys, stores rotated YouTube cookies, caches lyrics
+        sync: false
+      - key: MONGODB_DB          # database name (default ladybug_api)
+        value: ladybug_api
+      - key: ADMIN_API_KEY       # optional: enables /v1/admin/cookies + /v1/admin/storage. Keep it different from API_KEYS
+        sync: false
       - key: YT_COOKIES          # optional: Netscape cookies.txt contents, helps when YouTube shows a bot check
         sync: false
       - key: IMAGE_MODEL

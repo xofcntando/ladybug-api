@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from pydantic import BaseModel, Field
 
-from . import ai, config, http
+from . import ai, config, db, http, ratelimit
 from .fetch import fetch_bytes
 from .storage import cleanup, meta_path, save
 from .image import router as image_router
@@ -35,6 +35,7 @@ from .webcheck import router as web_router
 from .jobs import router as jobs_router
 from .info import router as info_router
 from .security import require_key
+from .admin import router as admin_router
 from .observability import ObservabilityMiddleware, log
 from .ratelimit import RateLimitMiddleware, router as account_router
 
@@ -43,12 +44,19 @@ async def lifespan(_: FastAPI):
     from .potserver import ensure_provider
     ensure_provider()
     tasks = [asyncio.create_task(_janitor())]
+    await db.start()  # optional MongoDB (MONGODB_URI); never raises, falls back to memory
+    if db.db() is not None:
+        restored = await ratelimit.restore()
+        log.info("restored %d requests of quota usage from mongodb", restored)
+        tasks += [asyncio.create_task(ratelimit.flush_loop()), asyncio.create_task(db.refresh_loop())]
     ping = os.getenv("RENDER_EXTERNAL_URL")
     if ping and config.SELF_PING:
         tasks.append(asyncio.create_task(_keep_awake(ping.rstrip("/") + "/health")))
     yield
     for t in tasks:
         t.cancel()
+    await ratelimit.flush()  # save the last few seconds of counts
+    await db.stop()
     await http.close()
 
 
@@ -116,6 +124,7 @@ app.include_router(dev_router, dependencies=auth)
 app.include_router(web_router, dependencies=auth)
 app.include_router(jobs_router, dependencies=auth)  # job boards: search, insights, HN hiring
 app.include_router(info_router, dependencies=auth)  # weather, geocode, holidays, crypto, wiki, books, hn, ip
+app.include_router(admin_router)  # ADMIN_API_KEY only: cookie rotation, MongoDB status
 app.include_router(account_router, dependencies=auth)  # /v1/account/usage
 
 
@@ -147,7 +156,7 @@ async def ready():
         return JSONResponse({"status": "unavailable", "storage": f"not writable ({type(e).__name__})"}, status_code=503)
     if free_mb < 20:
         return JSONResponse({"status": "unavailable", "storage": f"only {free_mb} MB free"}, status_code=503)
-    return {"status": "ok", "free_mb": free_mb, "browser": _browser_up()}
+    return {"status": "ok", "free_mb": free_mb, "browser": _browser_up(), "mongodb": db.status()["connected"] if db.ENABLED else "off"}
 
 
 def _browser_up() -> bool:

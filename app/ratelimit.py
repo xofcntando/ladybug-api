@@ -8,10 +8,15 @@ instance and keeps the hot path lock-free.
   DAILY_REQUEST_LIMIT=100000   requests per key per 24h (0 = unlimited)
   RATE_LIMIT_ENABLED=1         set to 0 to turn the quota off entirely
 
+With MONGODB_URI set (see db.py) the counts are also saved in 1-minute buckets every few seconds and restored at
+startup, so a redeploy no longer hands everyone a fresh window. The hot path stays in memory and never waits on the
+database; if MongoDB is down the quota simply behaves as before.
+
 Every counted response carries X-RateLimit-Limit / -Remaining / -Reset so a
 client can back off before it is blocked. Over-quota requests get a 429 with
 Retry-After.
 """
+import asyncio
 import time
 from collections import deque
 
@@ -19,7 +24,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from starlette.datastructures import MutableHeaders
 
-from . import config
+from . import config, db
 
 WINDOW = 86400  # 24 hours
 _buckets: dict[str, deque] = {}
@@ -44,6 +49,52 @@ def _sweep(now: float) -> None:
         _expire(bucket, now)
         if not bucket:
             _buckets.pop(key, None)
+
+
+_pending: dict[tuple[str, int], int] = {}  # (key_id, minute) -> requests not yet saved to MongoDB
+
+
+def _note(key: str, now: float) -> None:
+    if db.ENABLED:
+        k = (db.key_id(key), int(now // 60))
+        _pending[k] = _pending.get(k, 0) + 1
+
+
+async def restore() -> int:
+    """Rebuild the in-memory windows from MongoDB at startup. Returns how many requests were restored."""
+    saved = await db.load_usage(WINDOW)
+    if not saved:
+        return 0
+    by_id = {db.key_id(k): k for k in config.API_KEYS}
+    total = 0
+    for kid, rows in saved.items():
+        key = by_id.get(kid)
+        if not key:
+            continue
+        bucket = _buckets.setdefault(key, deque())
+        existing = list(bucket)  # requests that arrived while we were loading are newer than anything saved
+        bucket.clear()
+        for minute, n in sorted(rows):
+            bucket.extend([minute * 60 + 30.0] * n)
+            total += n
+        bucket.extend(existing)
+    return total
+
+
+async def flush() -> None:
+    global _pending
+    if not _pending:
+        return
+    batch, _pending = _pending, {}
+    if not await db.flush_usage(batch):
+        for k, n in batch.items():  # keep them for the next attempt
+            _pending[k] = _pending.get(k, 0) + n
+
+
+async def flush_loop(every: float = 10.0) -> None:
+    while True:
+        await asyncio.sleep(every)
+        await flush()
 
 
 def _key(request: Request) -> str:
@@ -127,6 +178,7 @@ class RateLimitMiddleware:
             return await resp(scope, receive, send)
 
         bucket.append(now)
+        _note(key, now)
         info = {"remaining": max(0, limit - len(bucket)), "reset": int(bucket[0] + WINDOW)}
         await self.app(scope, receive, with_headers(info))
 

@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from . import config, knight, ytfallback, ytdlp_update
+from . import config, db, knight, ytfallback, ytdlp_update
 from .cache import TTLCache, singleflight
 from .security import assert_public_url
 from .storage import meta_path, save_path
@@ -119,8 +119,13 @@ def _fix_cookie_tabs(raw: str) -> str:
 
 
 def _cookies_text() -> str:
-    """YT_COOKIES may be pasted as Netscape cookies.txt (real or literal \\n newlines), a JSON cookie export, or base64."""
-    raw = (config.YT_COOKIES or "").strip().strip('"').strip("'")
+    """Cookies saved through PUT /v1/admin/cookies (MongoDB) win; otherwise the YT_COOKIES env var."""
+    return _parse_cookies(db.cookies_override or config.YT_COOKIES)
+
+
+def _parse_cookies(raw: str) -> str:
+    """Cookies may be pasted as Netscape cookies.txt (real or literal \\n newlines), a JSON cookie export, or base64."""
+    raw = (raw or "").strip().strip('"').strip("'")
     if not raw:
         return ""
     if raw[:1] not in "[{#" and "\t" not in raw and "\\t" not in raw and "youtube" not in raw.lower():
