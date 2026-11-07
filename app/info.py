@@ -1,0 +1,204 @@
+"""Handy lookups backed by free, key-less public APIs: weather, geocoding, public holidays, crypto prices,
+Wikipedia summaries, book search, Hacker News and IP geolocation. Results are cached briefly.
+Routes live under /v1/info and require the usual API key."""
+import ipaddress
+import re
+from typing import Any
+
+import httpx
+from fastapi import APIRouter, HTTPException, Query
+
+from .cache import TTLCache, singleflight
+from .http import client
+
+router = APIRouter(prefix="/v1/info", tags=["info"])
+
+UA = {"User-Agent": "LadybugAPI/1.0 (https://github.com/xofcntando/ladybug-api)", "Accept": "application/json"}
+_cache = TTLCache(maxsize=500, ttl=300)
+
+_WMO = {0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast", 45: "Fog", 48: "Rime fog",
+        51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle", 56: "Freezing drizzle", 57: "Heavy freezing drizzle",
+        61: "Light rain", 63: "Rain", 65: "Heavy rain", 66: "Freezing rain", 67: "Heavy freezing rain",
+        71: "Light snow", 73: "Snow", 75: "Heavy snow", 77: "Snow grains", 80: "Light showers", 81: "Showers",
+        82: "Violent showers", 85: "Snow showers", 86: "Heavy snow showers", 95: "Thunderstorm",
+        96: "Thunderstorm with hail", 99: "Thunderstorm with heavy hail"}
+
+
+async def _get(url: str, params: dict | None = None, ttl: float = 300, not_found: str | None = None) -> Any:
+    key = (url, tuple(sorted((params or {}).items())))
+    hit = _cache.get(key)
+    if hit is not None:
+        return hit
+
+    async def make():
+        try:
+            r = await client().get(url, params=params, headers=UA, timeout=20, follow_redirects=True)
+        except httpx.TimeoutException:
+            raise HTTPException(504, "Upstream service timed out")
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"Upstream request failed ({type(e).__name__})")
+        if r.status_code == 404 and not_found:
+            raise HTTPException(404, not_found)
+        if r.status_code == 429:
+            raise HTTPException(503, "Upstream service is rate limiting us, try again shortly")
+        if r.status_code >= 400:
+            raise HTTPException(502, f"Upstream answered {r.status_code}")
+        try:
+            data = r.json()
+        except ValueError:
+            raise HTTPException(502, "Upstream returned invalid JSON")
+        _cache.set(key, data, ttl=ttl)
+        return data
+
+    return await singleflight(("info", key), make)
+
+
+# ---------------------------------------------------------------- geocoding + weather
+@router.get("/geocode")
+async def geocode(q: str = Query(..., min_length=1, max_length=120, description="City or place name"),
+                  limit: int = Query(5, ge=1, le=20), language: str = Query("en", max_length=5)):
+    """Place name -> coordinates, country, timezone and population."""
+    d = await _get("https://geocoding-api.open-meteo.com/v1/search",
+                   {"name": q, "count": limit, "language": language, "format": "json"}, ttl=86400)
+    res = [{"name": r.get("name"), "latitude": r.get("latitude"), "longitude": r.get("longitude"),
+            "country": r.get("country"), "country_code": r.get("country_code"), "region": r.get("admin1"),
+            "timezone": r.get("timezone"), "population": r.get("population"), "elevation_m": r.get("elevation")}
+           for r in d.get("results", [])]
+    if not res:
+        raise HTTPException(404, f"No place found for '{q}'")
+    return {"query": q, "count": len(res), "results": res}
+
+
+@router.get("/weather")
+async def weather(city: str | None = Query(None, max_length=120, description="City name (or give lat + lon)"),
+                  lat: float | None = Query(None, ge=-90, le=90), lon: float | None = Query(None, ge=-180, le=180),
+                  units: str = Query("metric", pattern="^(metric|imperial)$"),
+                  days: int = Query(3, ge=1, le=16)):
+    """Current weather and a daily forecast for a city or coordinates."""
+    place = None
+    if lat is None or lon is None:
+        if not city:
+            raise HTTPException(400, "Give either city, or lat and lon")
+        g = (await geocode(city, 1, "en"))["results"][0]
+        lat, lon, place = g["latitude"], g["longitude"], {k: g[k] for k in ("name", "country", "region", "timezone")}
+    imp = units == "imperial"
+    d = await _get("https://api.open-meteo.com/v1/forecast", {
+        "latitude": lat, "longitude": lon, "timezone": "auto", "forecast_days": days,
+        "current": "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m",
+        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,sunrise,sunset",
+        "temperature_unit": "fahrenheit" if imp else "celsius", "wind_speed_unit": "mph" if imp else "kmh",
+        "precipitation_unit": "inch" if imp else "mm"}, ttl=600)
+    c, dl = d.get("current", {}), d.get("daily", {})
+    forecast = [{"date": dl["time"][i], "summary": _WMO.get(dl["weather_code"][i], "Unknown"),
+                 "temp_max": dl["temperature_2m_max"][i], "temp_min": dl["temperature_2m_min"][i],
+                 "precipitation": dl["precipitation_sum"][i], "rain_chance_pct": dl["precipitation_probability_max"][i],
+                 "sunrise": dl["sunrise"][i], "sunset": dl["sunset"][i]} for i in range(len(dl.get("time", [])))]
+    return {"place": place, "latitude": d.get("latitude"), "longitude": d.get("longitude"), "timezone": d.get("timezone"),
+            "units": {"temperature": "°F" if imp else "°C", "wind": "mph" if imp else "km/h", "precipitation": "in" if imp else "mm"},
+            "current": {"time": c.get("time"), "summary": _WMO.get(c.get("weather_code"), "Unknown"),
+                        "temperature": c.get("temperature_2m"), "feels_like": c.get("apparent_temperature"),
+                        "humidity_pct": c.get("relative_humidity_2m"), "precipitation": c.get("precipitation"),
+                        "wind_speed": c.get("wind_speed_10m"), "wind_direction_deg": c.get("wind_direction_10m")},
+            "forecast": forecast}
+
+
+# ---------------------------------------------------------------- holidays
+@router.get("/holidays")
+async def holidays(country: str = Query(..., min_length=2, max_length=2, description="ISO country code, e.g. US, DE, GB"),
+                   year: int = Query(2026, ge=1975, le=2075), upcoming: bool = Query(False, description="Only holidays from today on")):
+    """Public holidays for a country and year."""
+    cc = country.upper()
+    d = await _get(f"https://date.nager.at/api/v3/PublicHolidays/{year}/{cc}", ttl=86400,
+                   not_found=f"No holiday data for country '{cc}'")
+    items = [{"date": h["date"], "name": h["name"], "local_name": h["localName"], "nationwide": h.get("global"),
+              "types": h.get("types")} for h in d]
+    if upcoming:
+        from datetime import date
+        today = date.today().isoformat()
+        items = [h for h in items if h["date"] >= today]
+    return {"country": cc, "year": year, "count": len(items), "holidays": items}
+
+
+# ---------------------------------------------------------------- crypto
+@router.get("/crypto")
+async def crypto(ids: str = Query("bitcoin,ethereum", max_length=300, description="CoinGecko ids, comma separated"),
+                 vs: str = Query("usd", max_length=60, description="Fiat/crypto codes, comma separated, e.g. usd,eur")):
+    """Spot prices with 24h change and market cap."""
+    if not re.fullmatch(r"[a-z0-9,\-_. ]+", ids.lower()) or not re.fullmatch(r"[a-z0-9, ]+", vs.lower()):
+        raise HTTPException(400, "Invalid ids or vs")
+    d = await _get("https://api.coingecko.com/api/v3/simple/price", {
+        "ids": ids.lower().replace(" ", ""), "vs_currencies": vs.lower().replace(" ", ""), "include_24hr_change": "true",
+        "include_market_cap": "true"}, ttl=60)
+    if not d:
+        raise HTTPException(404, "No matching coins. Use CoinGecko ids such as bitcoin, ethereum, solana")
+    return {"prices": d}
+
+
+# ---------------------------------------------------------------- wikipedia
+@router.get("/wiki")
+async def wiki(q: str = Query(..., min_length=1, max_length=200), lang: str = Query("en", pattern="^[a-z]{2,3}$")):
+    """Wikipedia summary for a topic (searches first, so loose titles work)."""
+    s = await _get(f"https://{lang}.wikipedia.org/w/api.php", {
+        "action": "query", "list": "search", "srsearch": q, "srlimit": 1, "format": "json"}, ttl=3600)
+    hits = s.get("query", {}).get("search", [])
+    if not hits:
+        raise HTTPException(404, f"No Wikipedia article for '{q}'")
+    title = hits[0]["title"]
+    d = await _get(f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title.replace(' ', '_').replace('/', '%2F')}",
+                   ttl=3600, not_found="Article not found")
+    return {"title": d.get("title"), "description": d.get("description"), "summary": d.get("extract"),
+            "thumbnail": (d.get("thumbnail") or {}).get("source"),
+            "url": (d.get("content_urls") or {}).get("desktop", {}).get("page"), "lang": lang}
+
+
+# ---------------------------------------------------------------- books
+@router.get("/books")
+async def books(q: str = Query(..., min_length=1, max_length=200, description="Title, author or ISBN"),
+                limit: int = Query(10, ge=1, le=50)):
+    """Book search via Open Library."""
+    d = await _get("https://openlibrary.org/search.json", {
+        "q": q, "limit": limit, "fields": "key,title,author_name,first_publish_year,isbn,cover_i,subject,number_of_pages_median,ratings_average"},
+        ttl=3600)
+    out = [{"title": b.get("title"), "authors": b.get("author_name"), "first_published": b.get("first_publish_year"),
+            "pages": b.get("number_of_pages_median"), "rating": b.get("ratings_average"),
+            "isbn": (b.get("isbn") or [None])[0], "subjects": (b.get("subject") or [])[:6],
+            "cover": f"https://covers.openlibrary.org/b/id/{b['cover_i']}-L.jpg" if b.get("cover_i") else None,
+            "url": f"https://openlibrary.org{b['key']}"} for b in d.get("docs", [])]
+    return {"query": q, "total": d.get("numFound"), "count": len(out), "books": out}
+
+
+# ---------------------------------------------------------------- hacker news
+@router.get("/hn")
+async def hacker_news(kind: str = Query("top", pattern="^(top|new|best|ask|show|job)$"), limit: int = Query(20, ge=1, le=50)):
+    """Hacker News front page lists. kind=job returns YC company job postings."""
+    ids = await _get(f"https://hacker-news.firebaseio.com/v0/{kind}stories.json", ttl=120)
+    import asyncio
+    items = await asyncio.gather(*(_get(f"https://hacker-news.firebaseio.com/v0/item/{i}.json", ttl=300) for i in ids[:limit]),
+                                 return_exceptions=True)
+    out = []
+    for it in items:
+        if isinstance(it, dict) and not it.get("dead") and not it.get("deleted"):
+            out.append({"id": it["id"], "title": it.get("title"), "url": it.get("url") or f"https://news.ycombinator.com/item?id={it['id']}",
+                        "score": it.get("score"), "by": it.get("by"), "comments": it.get("descendants"), "time": it.get("time"),
+                        "discussion": f"https://news.ycombinator.com/item?id={it['id']}"})
+    return {"kind": kind, "count": len(out), "stories": out}
+
+
+# ---------------------------------------------------------------- ip
+@router.get("/ip")
+async def ip_lookup(ip: str = Query(..., max_length=45, description="Public IPv4 or IPv6 address")):
+    """Geolocation, ISP and timezone for a public IP address."""
+    try:
+        addr = ipaddress.ip_address(ip.strip())
+    except ValueError:
+        raise HTTPException(400, "Not a valid IP address")
+    if not addr.is_global:
+        raise HTTPException(400, "Only public IP addresses can be looked up")
+    d = await _get(f"https://ipwho.is/{addr}", ttl=86400)
+    if not d.get("success", True):
+        raise HTTPException(404, d.get("message") or "Lookup failed")
+    return {"ip": d.get("ip"), "type": d.get("type"), "continent": d.get("continent"), "country": d.get("country"),
+            "country_code": d.get("country_code"), "region": d.get("region"), "city": d.get("city"),
+            "latitude": d.get("latitude"), "longitude": d.get("longitude"), "postal": d.get("postal"),
+            "timezone": (d.get("timezone") or {}).get("id"), "isp": (d.get("connection") or {}).get("isp"),
+            "org": (d.get("connection") or {}).get("org"), "asn": (d.get("connection") or {}).get("asn")}

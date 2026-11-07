@@ -32,6 +32,8 @@ from .cards import router as cards_router
 from .scrape import router as scrape_router
 from .devtools import router as dev_router
 from .webcheck import router as web_router
+from .jobs import router as jobs_router
+from .info import router as info_router
 from .security import require_key
 from .observability import ObservabilityMiddleware, log
 from .ratelimit import RateLimitMiddleware, router as account_router
@@ -112,6 +114,8 @@ app.include_router(compat_public)
 app.include_router(cards_router, dependencies=auth)
 app.include_router(dev_router, dependencies=auth)
 app.include_router(web_router, dependencies=auth)
+app.include_router(jobs_router, dependencies=auth)  # job boards: search, insights, HN hiring
+app.include_router(info_router, dependencies=auth)  # weather, geocode, holidays, crypto, wiki, books, hn, ip
 app.include_router(account_router, dependencies=auth)  # /v1/account/usage
 
 
