@@ -1,9 +1,13 @@
 """Handy lookups backed by free, key-less public APIs: weather, geocoding, public holidays, crypto prices,
-Wikipedia summaries, book search, Hacker News and IP geolocation. Results are cached briefly.
+Wikipedia summaries, book search, Hacker News, IP geolocation, dictionary definitions and trivia questions. Results are cached briefly.
 Routes live under /v1/info and require the usual API key."""
+import asyncio
+import html
 import ipaddress
+import random
 import re
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -202,3 +206,80 @@ async def ip_lookup(ip: str = Query(..., max_length=45, description="Public IPv4
             "latitude": d.get("latitude"), "longitude": d.get("longitude"), "postal": d.get("postal"),
             "timezone": (d.get("timezone") or {}).get("id"), "isp": (d.get("connection") or {}).get("isp"),
             "org": (d.get("connection") or {}).get("org"), "asn": (d.get("connection") or {}).get("asn")}
+
+
+# ---------------------------------------------------------------- dictionary
+@router.get("/dictionary")
+async def dictionary(word: str = Query(..., min_length=1, max_length=60, description="An English word"),
+                     related: bool = Query(True, description="Also fetch synonyms / antonyms / rhymes (Datamuse)")):
+    """Definitions, phonetics, audio, examples, synonyms and antonyms for an English word."""
+    w = word.strip().lower()
+    if not re.fullmatch(r"[a-z][a-z' \-]*", w):
+        raise HTTPException(400, "Give a single English word or short phrase (letters, apostrophe, hyphen)")
+    d = await _get(f"https://api.dictionaryapi.dev/api/v2/entries/en/{quote(w)}", ttl=86400,
+                   not_found=f"No definition found for '{w}'")
+    if not isinstance(d, list) or not d:
+        raise HTTPException(404, f"No definition found for '{w}'")
+    phon = next((p.get("text") for e in d for p in e.get("phonetics", []) if p.get("text")), None)
+    audio = next((p.get("audio") for e in d for p in e.get("phonetics", []) if p.get("audio")), None)
+    meanings: dict[str, dict] = {}
+    for e in d:
+        for m in e.get("meanings", []):
+            slot = meanings.setdefault(m.get("partOfSpeech") or "other", {"part_of_speech": m.get("partOfSpeech"), "definitions": [],
+                                                                         "synonyms": [], "antonyms": []})
+            for df in m.get("definitions", []):
+                slot["definitions"].append({"definition": df.get("definition"), "example": df.get("example")})
+            slot["synonyms"] += [x for x in m.get("synonyms", []) if x not in slot["synonyms"]]
+            slot["antonyms"] += [x for x in m.get("antonyms", []) if x not in slot["antonyms"]]
+    out = {"word": d[0].get("word", w), "phonetic": phon or d[0].get("phonetic"), "audio": audio,
+           "origin": next((e.get("origin") for e in d if e.get("origin")), None),
+           "meanings": list(meanings.values()), "source": next((e.get("sourceUrls", [None])[0] for e in d if e.get("sourceUrls")), None)}
+    if related:
+        async def dm(rel):
+            try:
+                return [x["word"] for x in await _get("https://api.datamuse.com/words", {rel: w, "max": 12}, ttl=86400)]
+            except HTTPException:
+                return []
+        syn, ant, rhy = await asyncio.gather(dm("rel_syn"), dm("rel_ant"), dm("rel_rhy"))
+        out["related"] = {"synonyms": syn, "antonyms": ant, "rhymes": rhy}
+    return out
+
+
+# ---------------------------------------------------------------- trivia
+_TRIVIA_CATS = {"general": 9, "books": 10, "film": 11, "music": 12, "tv": 14, "games": 15, "science": 17, "computers": 18,
+                "math": 19, "mythology": 20, "sports": 21, "geography": 22, "history": 23, "politics": 24, "art": 25,
+                "animals": 27, "vehicles": 28, "anime": 31, "cartoons": 32}
+
+
+@router.get("/trivia")
+async def trivia(amount: int = Query(5, ge=1, le=20),
+                 category: str | None = Query(None, description="One of: " + ", ".join(_TRIVIA_CATS)),
+                 difficulty: str | None = Query(None, pattern="^(easy|medium|hard)$"),
+                 type: str | None = Query(None, pattern="^(multiple|boolean)$", description="multiple choice or true/false")):
+    """Random trivia questions (Open Trivia DB). Each has shuffled `answers` plus the `correct_answer`."""
+    params: dict[str, Any] = {"amount": amount}
+    if category:
+        if category.lower() not in _TRIVIA_CATS:
+            raise HTTPException(400, "Unknown category. Use: " + ", ".join(_TRIVIA_CATS))
+        params["category"] = _TRIVIA_CATS[category.lower()]
+    if difficulty:
+        params["difficulty"] = difficulty
+    if type:
+        params["type"] = type
+    d = await _get("https://opentdb.com/api.php", params, ttl=0)  # never cache: every call should be a fresh draw
+    code = d.get("response_code")
+    if code == 5:
+        raise HTTPException(503, "Trivia source allows one request per 5 seconds, try again shortly")
+    if code in (1, 2) or not d.get("results"):
+        raise HTTPException(404, "Not enough questions for those filters, try a lower amount or fewer filters")
+    u = html.unescape
+    qs = []
+    for q in d["results"]:
+        answers = [u(a) for a in q["incorrect_answers"]] + [u(q["correct_answer"])]
+        if q.get("type") == "boolean":
+            answers.sort(reverse=True)  # True before False
+        else:
+            random.shuffle(answers)
+        qs.append({"category": u(q["category"]), "type": q["type"], "difficulty": q["difficulty"], "question": u(q["question"]),
+                   "answers": answers, "correct_answer": u(q["correct_answer"])})
+    return {"count": len(qs), "questions": qs}
