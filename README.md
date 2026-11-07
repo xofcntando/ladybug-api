@@ -30,8 +30,8 @@ All under `/v1` need `X-API-Key`. Full interactive list at `/docs`.
 
 `GET /health` needs no key. Instead of the header you can pass `?apikey=KEY` (handy for bots, but keys in URLs show up in logs).
 
-### Quota: 100000 requests per day per key
-Each API key gets **100000 requests per rolling 24 hours** — that is our own limit, not a third-party one. Set `DAILY_REQUEST_LIMIT` to change it (`0` = unlimited) or `RATE_LIMIT_ENABLED=0` to turn it off. Every counted response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`; once a key is over, `/v1` returns `429` with `Retry-After`. `GET /v1/account/usage` always answers (it is never counted) and shows `limit`, `used`, `remaining` and `reset_in` for the calling key. Counters are in memory, so a restart or redeploy begins a fresh window.
+### Quota: 3000 requests per day per key
+Each API key gets **3000 requests per rolling 24 hours** — that is our own limit, not a third-party one. Set `DAILY_REQUEST_LIMIT` to change it (`0` = unlimited) or `RATE_LIMIT_ENABLED=0` to turn it off. Every counted response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`; once a key is over, `/v1` returns `429` with `Retry-After`. `GET /v1/account/usage` always answers (it is never counted) and shows `limit`, `used`, `remaining` and `reset_in` for the calling key. Counters are in memory, so a restart or redeploy begins a fresh window.
 
 ### Media downloads
 Downloads are **small by default** so they finish quickly: MP3 at `AUDIO_KBPS` (128) and MP4 at `VIDEO_QUALITY_DEFAULT` (360p). Pass `kbps=64..320` for a smaller or better MP3, `quality=144..1080` for a taller video. Video prefers the lighter modern codecs (av01/vp9), which cuts ~25% off the file at the same height. Downloads by name (`/v1/yt/play`, `/api/ytmp3?query=`) skip live/upcoming results and automatically fall through to the next search hit if one is blocked or removed, so one bad result no longer wastes a whole retry cycle.

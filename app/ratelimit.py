@@ -1,11 +1,11 @@
 """Per-API-key daily request quota.
 
 Our own limit, not a third-party one: each key may make `DAILY_REQUEST_LIMIT`
-requests per rolling 24 hours (default 100000). Counters live in memory, so a
+requests per rolling 24 hours (default 3000). Counters live in memory, so a
 restart or redeploy starts a fresh window; that is deliberate for a free Render
 instance and keeps the hot path lock-free.
 
-  DAILY_REQUEST_LIMIT=100000   requests per key per 24h (0 = unlimited)
+  DAILY_REQUEST_LIMIT=3000     requests per key per 24h (0 = unlimited)
   RATE_LIMIT_ENABLED=1         set to 0 to turn the quota off entirely
 
 With MONGODB_URI set (see db.py) the counts are also saved in 1-minute buckets every few seconds and restored at

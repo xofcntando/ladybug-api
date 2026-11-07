@@ -9,8 +9,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 AI_MODEL = os.getenv("AI_MODEL", "")
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Our own per-API-key daily quota (not a third-party limit). 100000 requests / 24h by default.
-DAILY_REQUEST_LIMIT = int(os.getenv("DAILY_REQUEST_LIMIT", "100000"))
+# Our own per-API-key daily quota (not a third-party limit). 3000 requests / 24h by default.
+DAILY_REQUEST_LIMIT = int(os.getenv("DAILY_REQUEST_LIMIT", "3000"))
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "1") != "0"
 
 # Small-by-default downloads: 128 kbps MP3 and 360p progressive MP4 (no ffmpeg merge, so it is fast).

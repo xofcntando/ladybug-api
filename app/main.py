@@ -89,7 +89,7 @@ async def _keep_awake(url: str):
 app = FastAPI(title="Ladybug API", version="1.2.0", lifespan=lifespan,
               description="Download, file and AI APIs. Send X-API-Key on every /v1 request.")
 # Order matters: the LAST one added is the outermost. Request flow: Observability -> CORS -> GZip -> RateLimit -> app.
-app.add_middleware(RateLimitMiddleware)  # per-API-key daily quota (DAILY_REQUEST_LIMIT, default 100000)
+app.add_middleware(RateLimitMiddleware)  # per-API-key daily quota (DAILY_REQUEST_LIMIT, default 3000)
 app.add_middleware(GZipMiddleware, minimum_size=1024)  # JSON/text shrink 5-10x; images/video/audio are excluded by default
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
                    expose_headers=["Content-Disposition", "X-RateLimit-Limit", "X-RateLimit-Remaining",

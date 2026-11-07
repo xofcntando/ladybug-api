@@ -70,7 +70,7 @@ services:
       - key: VIDEO_QUALITY_DEFAULT # MP4 height for downloads (smaller = faster)
         value: "360"
       - key: DAILY_REQUEST_LIMIT # our own quota: requests per API key per rolling 24h (0 = unlimited)
-        value: "100000"
+        value: "3000"
       - key: RATE_LIMIT_ENABLED  # 0 disables the per-key daily quota entirely
         value: "1"
       - key: KNIGHT_API_KEY      # optional: your own KnightBot key; the shared default allows only 3000/day for everyone
