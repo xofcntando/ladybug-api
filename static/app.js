@@ -107,6 +107,14 @@ const R = {
     el('div', { class: 'meta' }, `${i + 1}. ${q.category} · ${q.difficulty}`), el('div', { class: 'text' }, q.question),
     el('ul', {}, q.answers.map(a => el('li', {}, a))),
     el('details', {}, el('summary', {}, 'Show answer'), el('b', {}, q.correct_answer))))),
+  song: d => el('div', {}, d.results.map(x => el('div', { class: 'card media' }, x.cover ? el('img', { src: x.cover, alt: '' }) : el('div'),
+    el('div', {}, el('h2', {}, x.title), el('div', { class: 'meta' }, [x.artist, x.album, x.release_date, x.genre, mins(x.duration)].filter(Boolean).join('  ·  ')),
+      x.preview ? el('audio', { src: x.preview, controls: '', style: 'width:100%;margin:8px 0' }) : '',
+      el('div', {}, Object.entries(x.links || {}).filter(([, u]) => u).map(([n, u]) => el('a', { href: u, target: '_blank', rel: 'noopener', style: 'margin-right:12px' }, n)))))) ),
+  time: d => el('div', { class: 'card' }, copyBar(d.timezone, d.local_time),
+    el('h2', {}, d.time_12h, ' ', el('span', { class: 'meta' }, `${d.abbreviation} · ${d.utc_offset}${d.dst ? ' · daylight saving' : ''}`)),
+    el('div', {}, [d.place?.name, d.place?.country].filter(Boolean).join(', ') || d.timezone), el('div', { class: 'meta' }, d.date),
+    d.sun ? el('div', { class: 'meta', style: 'margin-top:8px' }, `Sunrise ${d.sun.sunrise.slice(11)} · Sunset ${d.sun.sunset.slice(11)} · Day ${d.sun.day_length}`) : ''),
   files: async () => {
     const d = await api('/v1/files');
     const box = el('div', { class: 'card' });
@@ -286,6 +294,8 @@ const TOOLS = [
   { g: 'Info', id: 'i-ip', name: 'IP lookup', desc: 'Location, ISP and timezone of a public IP address.', fields: [T('ip', 'IP address', { def: '8.8.8.8' })], submit: 'Look up', run: get('/v1/info/ip') },
   { g: 'Info', id: 'i-dict', name: 'Dictionary', desc: 'Definitions, pronunciation, examples, synonyms, antonyms and rhymes for an English word.', fields: [T('word', 'Word', { def: 'serendipity' })], submit: 'Define', run: get('/v1/info/dictionary', 'dict') },
   { g: 'Info', id: 'i-trivia', name: 'Trivia', desc: 'Random quiz questions. Wait a few seconds between draws.', fields: [{ k: 'amount', label: 'Questions', type: 'number', def: 5 }, S('category', 'Category', [['', 'Any'], ...['general', 'books', 'film', 'music', 'tv', 'games', 'science', 'computers', 'math', 'mythology', 'sports', 'geography', 'history', 'politics', 'art', 'animals', 'vehicles', 'anime', 'cartoons'].map(x => [x, x])]), S('difficulty', 'Difficulty', [['', 'Any'], ['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']]), S('type', 'Type', [['', 'Any'], ['multiple', 'Multiple choice'], ['boolean', 'True / false']])], submit: 'Get questions', run: get('/v1/info/trivia', 'trivia') },
+  { g: 'Info', id: 'i-song', name: 'Song search', desc: 'Artist, album, cover art, 30-second preview, release date and store links.', fields: [T('q', 'Song or artist', { ph: 'blinding lights weeknd' }), { k: 'limit', label: 'Results', type: 'number', def: 5 }], submit: 'Search songs', run: get('/v1/info/song', 'song') },
+  { g: 'Info', id: 'i-time', name: 'Local time & sun', desc: 'Current time, UTC offset, daylight saving, sunrise and sunset for a city.', fields: [T('city', 'City', { def: 'Johannesburg' })], submit: 'Get time', run: get('/v1/info/time', 'time') },
   { g: 'Account', id: 'acc-usage', name: 'My usage', desc: 'Requests used today and left on your key.', fields: [], submit: 'Check usage', run: get('/v1/account/usage') },
   { g: 'Account', id: 'acc-dl', name: 'Downloader status', desc: 'Is the media downloader healthy? Cookies, PO-token and backend state.', fields: [], submit: 'Check status', run: get('/v1/media/status') },
   { g: 'Account', id: 'acc-diag', name: 'Downloader diagnose', desc: 'Test a YouTube link end to end and see where it fails.', fields: [T('url', 'Test link', { def: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' })], submit: 'Diagnose', run: get('/v1/media/diagnose') },

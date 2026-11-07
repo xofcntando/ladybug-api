@@ -1,11 +1,14 @@
 """Handy lookups backed by free, key-less public APIs: weather, geocoding, public holidays, crypto prices,
-Wikipedia summaries, book search, Hacker News, IP geolocation, dictionary definitions and trivia questions. Results are cached briefly.
+Wikipedia summaries, book search, Hacker News, IP geolocation, dictionary definitions, trivia questions, song
+search (Deezer + iTunes) and local time / sunrise / sunset. Results are cached briefly.
 Routes live under /v1/info and require the usual API key."""
 import asyncio
 import html
 import ipaddress
 import random
 import re
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
 from urllib.parse import quote
 
@@ -283,3 +286,107 @@ async def trivia(amount: int = Query(5, ge=1, le=20),
         qs.append({"category": u(q["category"]), "type": q["type"], "difficulty": q["difficulty"], "question": u(q["question"]),
                    "answers": answers, "correct_answer": u(q["correct_answer"])})
     return {"count": len(qs), "questions": qs}
+
+
+# ---------------------------------------------------------------- song search
+def _hi_res(url: str | None) -> str | None:
+    return re.sub(r"/\d+x\d+bb\.", "/600x600bb.", url) if url else url
+
+
+@router.get("/song")
+async def song(q: str | None = Query(None, min_length=2, max_length=150, description="Song and/or artist, any word order"),
+               title: str | None = Query(None, max_length=100), artist: str | None = Query(None, max_length=100),
+               limit: int = Query(5, ge=1, le=25)):
+    """Find songs: artist, album, cover art, 30-second preview, release date, genre and store links (Deezer + iTunes)."""
+    term = (q or f"{title or ''} {artist or ''}").strip()
+    if not term:
+        raise HTTPException(422, "Provide q= or title=")
+    dz, it = await asyncio.gather(
+        _get("https://api.deezer.com/search", {"q": term, "limit": limit}, ttl=3600),
+        _get("https://itunes.apple.com/search", {"term": term, "media": "music", "entity": "song", "limit": 25}, ttl=3600),  # wide net: only used to enrich
+        return_exceptions=True)
+    if isinstance(dz, HTTPException) and isinstance(it, HTTPException):
+        raise dz
+    dz = dz.get("data", []) if isinstance(dz, dict) else []
+    it = it.get("results", []) if isinstance(it, dict) else []
+
+    def key(t, a):
+        return re.sub(r"[^a-z0-9]+", "", f"{t}|{a}".lower())
+
+    itunes = {key(r.get("trackName"), r.get("artistName")): r for r in it}
+    out, seen = [], set()
+    for d in dz:
+        t, a = d.get("title_short") or d.get("title"), (d.get("artist") or {}).get("name")
+        k = key(t, a)
+        if k in seen:
+            continue
+        seen.add(k)
+        i = itunes.get(k, {})
+        out.append({"title": t, "artist": a, "album": (d.get("album") or {}).get("title") or i.get("collectionName"),
+                    "duration": d.get("duration") or (int(i["trackTimeMillis"] / 1000) if i.get("trackTimeMillis") else None),
+                    "explicit": d.get("explicit_lyrics") if d.get("explicit_lyrics") is not None else i.get("trackExplicitness") == "explicit",
+                    "release_date": (i.get("releaseDate") or "")[:10] or None, "genre": i.get("primaryGenreName"),
+                    "cover": (d.get("album") or {}).get("cover_big") or _hi_res(i.get("artworkUrl100")),
+                    "preview": d.get("preview") or i.get("previewUrl"),
+                    "links": {"deezer": d.get("link"), "itunes": i.get("trackViewUrl")}})
+    for k, i in itunes.items():  # songs only iTunes knew about
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append({"title": i.get("trackName"), "artist": i.get("artistName"), "album": i.get("collectionName"),
+                    "duration": int(i["trackTimeMillis"] / 1000) if i.get("trackTimeMillis") else None,
+                    "explicit": i.get("trackExplicitness") == "explicit", "release_date": (i.get("releaseDate") or "")[:10] or None,
+                    "genre": i.get("primaryGenreName"), "cover": _hi_res(i.get("artworkUrl100")), "preview": i.get("previewUrl"),
+                    "links": {"deezer": None, "itunes": i.get("trackViewUrl")}})
+    if not out:
+        raise HTTPException(404, f"No songs found for '{term}'")
+    return {"query": term, "count": len(out[:limit]), "results": out[:limit]}
+
+
+# ---------------------------------------------------------------- time + sun
+def _fmt_off(sec: int) -> str:
+    sign = "+" if sec >= 0 else "-"
+    sec = abs(sec)
+    return f"UTC{sign}{sec // 3600:02d}:{sec % 3600 // 60:02d}"
+
+
+@router.get("/time")
+async def local_time(city: str | None = Query(None, max_length=120, description="City name (or give lat + lon, or tz)"),
+                     lat: float | None = Query(None, ge=-90, le=90), lon: float | None = Query(None, ge=-180, le=180),
+                     tz: str | None = Query(None, max_length=60, description="IANA zone, e.g. Europe/Budapest")):
+    """Current local time, UTC offset, daylight saving, and today's sunrise / sunset / day length for a place."""
+    place, zone = None, tz
+    if tz:
+        try:
+            ZoneInfo(tz)
+        except (ZoneInfoNotFoundError, ValueError, OSError):
+            raise HTTPException(400, "Unknown time zone. Use an IANA name like Africa/Johannesburg")
+    if lat is None or lon is None:
+        if city:
+            g = (await geocode(city, 1, "en"))["results"][0]
+            lat, lon = g["latitude"], g["longitude"]
+            place = {k: g[k] for k in ("name", "country", "region")}
+            zone = zone or g["timezone"]
+        elif not tz:
+            raise HTTPException(400, "Give city, lat and lon, or tz")
+    sun = None
+    if lat is not None and lon is not None:
+        d = await _get("https://api.open-meteo.com/v1/forecast", {
+            "latitude": lat, "longitude": lon, "timezone": zone or "auto", "forecast_days": 1,
+            "daily": "sunrise,sunset,daylight_duration"}, ttl=1800)
+        zone = zone or d.get("timezone")
+        dl = d.get("daily", {})
+        if dl.get("sunrise"):
+            sun = {"date": dl["time"][0], "sunrise": dl["sunrise"][0], "sunset": dl["sunset"][0],
+                   "day_length": (lambda s: f"{int(s // 3600)}h {int(s % 3600 // 60)}m")(dl["daylight_duration"][0])}
+    if not zone:
+        raise HTTPException(502, "Could not determine the time zone")
+    try:
+        zi = ZoneInfo(zone)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        raise HTTPException(502, f"Time zone '{zone}' is not available on this server")
+    now = datetime.now(timezone.utc).astimezone(zi)
+    return {"place": place, "timezone": zone, "abbreviation": now.tzname(), "utc_offset": _fmt_off(int(now.utcoffset().total_seconds())),
+            "dst": bool(now.dst()), "local_time": now.isoformat(timespec="seconds"), "date": now.strftime("%A, %d %B %Y"),
+            "time_12h": now.strftime("%I:%M %p").lstrip("0"), "utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "sun": sun}
