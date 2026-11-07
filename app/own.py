@@ -5,6 +5,7 @@ import asyncio
 import io
 import random
 import re
+import unicodedata
 from typing import Literal
 from urllib.parse import quote
 
@@ -47,45 +48,169 @@ def _strip_ts(s: str) -> str:
     return re.sub(r"^\[[0-9:.]+\]\s?", "", s, flags=re.M)
 
 
+def _norm(s: str | None) -> str:
+    """Lower-case, accent-free, punctuation-free text for comparing titles and artists."""
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower()
+    s = re.sub(r"\((feat|ft|with|prod)[^)]*\)|\[[^\]]*\]", " ", s)  # (feat. X) / [Official Video]
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", s)).strip()
+
+
+def _tokens(s: str | None) -> set[str]:
+    return {t for t in _norm(s).split() if t not in ("the", "a", "an", "and", "feat", "ft", "official", "lyrics", "video")}
+
+
+def _clean_meta(title: str | None, artist: str | None) -> tuple[str | None, str | None]:
+    """LRCLIB is user-submitted: titles like 'Artist - Song' with artist='Song' are common. Undo that."""
+    t, a = (title or "").strip(), (artist or "").strip()
+    for sep in (" - ", " – ", " — "):
+        if sep in t:
+            left, right = [p.strip() for p in t.split(sep, 1)]
+            if a and _norm(left) == _norm(a):
+                t = right
+            elif a and _norm(right) == _norm(a):  # artist field holds the song name: 'Artist - Song' / artist='Song'
+                a, t = left, right
+            elif not a or _norm(a) == _norm(t) or sep in a:
+                a, t = left, right
+            break
+    if " - " in a and _norm(a.split(" - ", 1)[1]) == _norm(t):
+        a = a.split(" - ", 1)[0].strip()
+    return t or None, a or None
+
+
+def _score(x: dict, want_t: set, want_a: set, query: set, duration: float | None) -> float:
+    t, a = _clean_meta(x.get("trackName") or x.get("name"), x.get("artistName"))
+    tt, ta = _tokens(t), _tokens(a)
+    s = 0.0
+    if want_t:
+        s += 4 * len(want_t & tt) / len(want_t) - 1.5 * len(tt - want_t) / max(len(tt), 1)
+    if want_a:
+        s += 3 * len(want_a & ta) / len(want_a)
+    if query:  # free-text query: every token should be explained by title or artist
+        s += 5 * len(query & (tt | ta)) / len(query) - 1.0 * len((tt | ta) - query) / max(len(tt | ta), 1)
+    if x.get("syncedLyrics"):
+        s += 0.3
+    if duration and x.get("duration"):
+        d = abs(float(x["duration"]) - duration)
+        s += 1.0 if d <= 3 else 0.4 if d <= 10 else -1.0 if d > 30 else 0
+    return s
+
+
+async def _lrclib_json(path: str, params: dict):
+    """LRCLIB call that never raises: returns None (miss / outage) so the next strategy can run."""
+    try:
+        r = await client().get(f"https://lrclib.net/api/{path}", params=params, headers=UA, timeout=12, follow_redirects=True)
+        return r.json() if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
+async def _resolve_track(q: str) -> dict | None:
+    """Ask Deezer (keyless) which real song a free-text query means -> clean title / artist / duration."""
+    try:
+        r = await client().get("https://api.deezer.com/search", params={"q": q, "limit": 5}, headers=UA, timeout=8)
+        hits = r.json().get("data") or []
+    except (httpx.HTTPError, ValueError):
+        return None
+    qt = _tokens(q)
+    best, best_s = None, 0.0
+    for h in hits:  # Deezer orders by popularity: take the first hit that explains the whole query, else the best coverage
+        ht = _tokens(h.get("title_short") or h.get("title")) | _tokens((h.get("artist") or {}).get("name"))
+        s = len(qt & ht) / max(len(qt), 1)
+        if s >= 0.999:
+            best, best_s = h, s
+            break
+        if s > best_s:
+            best, best_s = h, s
+    if not best or best_s < 0.6:
+        return None
+    return {"title": best.get("title_short") or best.get("title"), "artist": (best.get("artist") or {}).get("name"),
+            "duration": best.get("duration")}
+
+
+def _lrclib_out(x: dict, synced: bool, title=None, artist=None) -> dict | None:
+    plain = x.get("plainLyrics") or _strip_ts(x.get("syncedLyrics") or "")
+    if not plain.strip():
+        return None
+    t, a = _clean_meta(x.get("trackName"), x.get("artistName"))
+    out = {"provider": "lrclib", "title": title or t, "artist": artist or a, "album": x.get("albumName"),
+           "duration": int(x["duration"]) if x.get("duration") else None, "instrumental": bool(x.get("instrumental")),
+           "lyrics": plain.strip()}
+    if synced:
+        out["synced"] = x.get("syncedLyrics")
+    return out
+
+
+async def _ovh(artist: str, title: str) -> str:
+    try:
+        r = await client().get(f"https://api.lyrics.ovh/v1/{quote(artist, safe='')}/{quote(title, safe='')}",
+                               headers=UA, timeout=12)
+        return (r.json().get("lyrics") or "").strip() if r.status_code == 200 else ""
+    except (httpx.HTTPError, ValueError):
+        return ""
+
+
 @router.get("/v1/lyrics", tags=["own"])
-async def lyrics(query: str | None = Query(None, min_length=2, max_length=150, description="Song and artist, e.g. 'blinding lights weeknd'"),
+async def lyrics(query: str | None = Query(None, min_length=2, max_length=150, description="Song and artist, e.g. 'blinding lights weeknd' or 'Queen - Bohemian Rhapsody'"),
                  title: str | None = Query(None, max_length=100), artist: str | None = Query(None, max_length=100),
                  synced: bool = Query(False, description="Include time-synced (LRC) lyrics when available")):
-    """Song lyrics. Use query= (free text) or title= and artist=. Own source: LRCLIB, backup lyrics.ovh, last resort KnightBot."""
+    """Song lyrics. Use query= (free text, any word order) or title= and artist=. The song is first identified (clean
+    title / artist), then lyrics come from LRCLIB (exact match, then ranked search) with lyrics.ovh as backup."""
+    query = (query or "").strip() or None
+    title, artist = (title or "").strip() or None, (artist or "").strip() or None
     if not (query or title):
         raise HTTPException(422, "Provide query= or title=")
-    key = f"ly:{query}:{title}:{artist}:{synced}"
+    free = query or f"{title} {artist or ''}".strip()
+    key = f"ly2:{_norm(free)}:{_norm(title)}:{_norm(artist)}:{synced}"
     if (hit := _cget(key)) is not None:
         return hit
-    try:
-        if title and artist:
-            r = await _get("https://lrclib.net/api/get", {"track_name": title, "artist_name": artist})
-            items = [r.json()]
-        else:
-            r = await _get("https://lrclib.net/api/search", {"q": query or f"{title} {artist or ''}".strip()})
-            items = r.json()
-        for x in items:
-            if x.get("plainLyrics") or x.get("syncedLyrics"):
-                plain = x.get("plainLyrics") or _strip_ts(x.get("syncedLyrics") or "")
-                out = {"provider": "lrclib", "title": x.get("trackName"), "artist": x.get("artistName"),
-                       "album": x.get("albumName"), "duration": int(x["duration"]) if x.get("duration") else None,
-                       "instrumental": x.get("instrumental", False), "lyrics": plain.strip()}
-                if synced:
-                    out["synced"] = x.get("syncedLyrics")
+
+    # 1. identify the song (skipped when the caller already gave a clean title + artist)
+    known = {"title": title, "artist": artist, "duration": None} if title and artist else None
+    ident = known or await _resolve_track(free)
+    c_title, c_artist, c_dur = (ident["title"], ident["artist"], ident.get("duration")) if ident else (title, artist, None)
+    want_t, want_a = _tokens(c_title), _tokens(c_artist)
+    qtok = _tokens(free) if not (title and artist) else set()
+
+    # 2. LRCLIB: exact lookup on the identified song, then searches; pick the best-scoring entry that has lyrics
+    pool: list[dict] = []
+    if c_title and c_artist:
+        params = {"track_name": c_title, "artist_name": c_artist}
+        if c_dur:
+            params["duration"] = c_dur
+        exact, by_fields = await asyncio.gather(
+            _lrclib_json("get", params), _lrclib_json("search", {"track_name": c_title, "artist_name": c_artist}))
+        if isinstance(exact, dict) and exact.get("id"):
+            pool.append(exact)
+        pool += by_fields if isinstance(by_fields, list) else []
+    if not pool or not any(p.get("plainLyrics") or p.get("syncedLyrics") for p in pool):
+        for q in dict.fromkeys(x for x in (free, f"{c_title} {c_artist}" if c_title and c_artist else None, c_title) if x):
+            res = await _lrclib_json("search", {"q": q})
+            pool += res if isinstance(res, list) else []
+            if any(p.get("plainLyrics") or p.get("syncedLyrics") for p in pool):
+                break
+    cands = [p for p in pool if (p.get("plainLyrics") or p.get("syncedLyrics")) and not p.get("instrumental")]
+    if cands:
+        best = max(cands, key=lambda p: _score(p, want_t, want_a, qtok, c_dur))
+        if _score(best, want_t, want_a, qtok, c_dur) > 0 or ident is None:
+            out = _lrclib_out(best, synced, c_title if ident else None, c_artist if ident else None)
+            if out:
                 return _cset(key, out)
-    except HTTPException:
-        pass
-    if title and artist or (query and " - " in query):  # lyrics.ovh needs artist + title
-        a, t = (artist, title) if title and artist else [p.strip() for p in query.split(" - ", 1)]
-        try:
-            r = await _get(f"https://api.lyrics.ovh/v1/{quote(a, safe='')}/{quote(t, safe='')}")
-            ly = (r.json().get("lyrics") or "").strip()
-            if ly:
-                return _cset(key, {"provider": "lyrics.ovh", "title": t, "artist": a, "album": None, "duration": None,
-                                   "instrumental": False, "lyrics": ly})
-        except HTTPException:
-            pass
-    raise HTTPException(404, "No lyrics found. Try 'artist - title' or title= and artist=")
+    if any(p.get("instrumental") for p in pool) and not cands and ident:
+        return _cset(key, {"provider": "lrclib", "title": c_title, "artist": c_artist, "album": None, "duration": c_dur,
+                           "instrumental": True, "lyrics": ""})
+
+    # 3. lyrics.ovh: needs artist + title. Try the identified song, then any 'a - b' split in both orders.
+    pairs = []
+    if c_title and c_artist:
+        pairs.append((c_artist, c_title))
+    if query and " - " in query:
+        l, r = [p.strip() for p in query.split(" - ", 1)]
+        pairs += [(l, r), (r, l)]
+    for a, t in dict.fromkeys(pairs):
+        if ly := await _ovh(a, t):
+            return _cset(key, {"provider": "lyrics.ovh", "title": t, "artist": a, "album": None, "duration": None,
+                               "instrumental": False, "lyrics": ly})
+    raise HTTPException(404, "No lyrics found. Check the spelling, or pass title= and artist=")
 
 
 # ------------------------------------------------------------------ 2-6. fun
