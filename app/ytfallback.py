@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import httpx
@@ -123,19 +124,35 @@ async def cobalt_fetch(url: str, kind: str, quality: int, max_minutes: int):
 # ---- video-download-api.com (optional, paid per request: ~$0.0002 per MP3 / MP4). Set VDA_API_KEY. ------------------
 # This is the engine behind many "free ytmp3" sites, with its own proxy pool, so it works from Render's IP.
 # Docs: https://video-download-api.com/api/docs  (new accounts get a one-time test credit of ~25 requests).
-VDA_KEY = os.getenv("VDA_API_KEY", "")
+VDA_KEY = os.getenv("VDA_API_KEY", "")  # one key, or up to 10 separated by commas / spaces / newlines
+VDA_KEYS = list(dict.fromkeys(k for k in re.split(r"[,\s]+", VDA_KEY) if k))[:10]
 VDA_BASE = os.getenv("VDA_API_BASE", "https://p.savenow.to").rstrip("/")
 VDA_VIDEO_Q = [144, 240, 360, 480, 720, 1080]
+VDA_BALANCE_COOLDOWN = 600  # an empty key is skipped for 10 minutes (it may be topped up), then tried again
 
 
 # Last thing VDA told us. A key that does not exist is a *configuration* error, not a transient
 # failure, so we remember it and surface it on /v1/media/status instead of retrying every request.
 vda_last_error: str | None = None
-vda_key_invalid: bool = False
+vda_key_invalid: bool = False  # True when every configured key was rejected as nonexistent
+_vda_dead: set[str] = set()  # keys VDA says do not exist (until restart)
+_vda_empty: dict[str, float] = {}  # key -> monotonic time until which it is skipped (no balance)
+_vda_rr = 0  # round-robin cursor so load spreads over all keys
+
+
+def _vda_usable() -> list[str]:
+    now = time.monotonic()
+    return [k for k in VDA_KEYS if k not in _vda_dead and _vda_empty.get(k, 0) <= now]
 
 
 def vda_enabled() -> bool:
-    return bool(VDA_KEY) and not vda_key_invalid
+    return bool(_vda_usable())
+
+
+def vda_status() -> dict:
+    now = time.monotonic()
+    return {"keys": len(VDA_KEYS), "usable": len(_vda_usable()), "invalid": len(_vda_dead),
+            "out_of_balance": sum(1 for k, t in _vda_empty.items() if t > now and k not in _vda_dead)}
 
 
 async def vda_fetch(url: str, kind: str, quality: int, max_minutes: int):
@@ -145,24 +162,40 @@ async def vda_fetch(url: str, kind: str, quality: int, max_minutes: int):
     fmt = "mp3" if kind == "audio" else str(min(VDA_VIDEO_Q, key=lambda x: (x < quality, abs(x - quality))))
     ext = "mp3" if kind == "audio" else "mp4"
     c = client()
-    try:
-        r = await c.get(VDA_BASE + "/ajax/download.php", timeout=30, headers={"User-Agent": UA},
-                        params={"url": url, "format": fmt, "apikey": VDA_KEY, "add_info": 1, "allow_extended_duration": 0})
-        d = r.json()
-    except (httpx.HTTPError, ValueError) as e:
-        raise HTTPException(502, f"VDA unreachable ({type(e).__name__})")
-    if r.status_code in (401, 402, 403):  # bad key / no balance: tell the owner, not the end user
+    global _vda_rr
+    keys = _vda_usable()
+    if not keys:
+        raise HTTPException(502, "VDA: no usable key (all out of balance or invalid) - top up at https://video-download-api.com/dashboard")
+    start = _vda_rr % len(keys)
+    _vda_rr += 1
+    keys = keys[start:] + keys[:start]
+    r = d = None
+    for key in keys:
+        try:
+            r = await c.get(VDA_BASE + "/ajax/download.php", timeout=30, headers={"User-Agent": UA},
+                            params={"url": url, "format": fmt, "apikey": key, "add_info": 1, "allow_extended_duration": 0})
+            d = r.json()
+        except (httpx.HTTPError, ValueError) as e:
+            raise HTTPException(502, f"VDA unreachable ({type(e).__name__})")
         msg = str(d.get("error_code") or d.get("message") or r.status_code)
-        vda_last_error = msg
-        if "key does not exist" in msg.lower() or "invalid" in msg.lower() or "unauthor" in msg.lower():
-            vda_key_invalid = True  # stop trying it until the process restarts
-        raise HTTPException(502, f"VDA: {msg}")
+        low = msg.lower()
+        if r.status_code in (401, 402, 403) or "balance" in low or "credit" in low:
+            # bad key / no balance: remember why, then fall through to the next key
+            vda_last_error = msg
+            if "balance" in low or "credit" in low or r.status_code == 402:
+                _vda_empty[key] = time.monotonic() + VDA_BALANCE_COOLDOWN
+            else:
+                _vda_dead.add(key)  # nonexistent / unauthorized: stop trying it until restart
+            vda_key_invalid = bool(VDA_KEYS) and all(k in _vda_dead for k in VDA_KEYS)
+            r = d = None
+            continue
+        break
+    if r is None or d is None:
+        st = vda_status()
+        raise HTTPException(502, f"VDA: all {st['keys']} key(s) failed ({st['out_of_balance']} out of balance, "
+                                 f"{st['invalid']} invalid) - top up at https://video-download-api.com/dashboard")
     jid = d.get("id")
     if not jid or r.status_code >= 400:
-        why = str(d.get("message") or d.get("error_code") or r.status_code)
-        if "balance" in why.lower() or "credit" in why.lower():
-            vda_last_error = why
-            raise HTTPException(502, "VDA: out of balance - top up at https://video-download-api.com/dashboard")
         raise HTTPException(502, f"VDA could not start the job: {d.get('message') or d.get('error_code') or r.status_code}")
     info = d.get("info") or {}
     link = None
