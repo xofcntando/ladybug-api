@@ -240,7 +240,8 @@ async def _himalayas(q, p) -> tuple[list[dict], int | None]:
 
 # name -> (fetcher, searches keywords upstream?, human description)
 SOURCES: dict[str, tuple[Callable[..., Awaitable[tuple[list[dict], int | None]]], bool, str]] = {
-    "remotive": (_remotive, True, "Remotive - curated remote jobs (tech, marketing, support, ...)"),
+    "remotive": (_remotive, False,  # its search is fuzzy (nonsense terms still return jobs), so we re-check keywords locally
+                  "Remotive - curated remote jobs (tech, marketing, support, ...)"),
     "arbeitnow": (_arbeitnow, False, "Arbeitnow - jobs in Germany and Europe, visa-friendly, remote and on-site"),
     "remoteok": (_remoteok, False, "Remote OK - remote jobs with salary data"),
     "jobicy": (_jobicy, True, "Jobicy - remote jobs with level, industry and salary"),
