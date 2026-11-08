@@ -82,3 +82,15 @@ def test_key_list_parsing_caps_at_ten():
     raw = ",".join(f"k{i}" for i in range(15)) + ", k0"
     keys = list(dict.fromkeys(k for k in re.split(r"[,\s]+", raw) if k))[:10]
     assert len(keys) == 10
+
+
+def test_backoff_grows_then_caps_and_resets():
+    from app import media
+    media._health.clear(); media._fails.clear()
+    cool = []
+    for _ in range(6):
+        media._note("ytdlp", False)
+        cool.append(round(media._health["ytdlp"] - time.monotonic()))
+    assert cool[0] == 300 and cool[1] == 600 and cool[2] == 1200 and cool[3] == 1800 and cool[5] == 1800
+    media._note("ytdlp", True)
+    assert "ytdlp" not in media._health and "ytdlp" not in media._fails
