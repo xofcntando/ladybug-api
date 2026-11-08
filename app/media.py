@@ -191,7 +191,7 @@ def _opts(tmp: Path, extra: dict, proxy: str | None = None) -> dict:
     px = proxy if proxy is not None else (_proxies()[0] if _proxies() else None)
     if px:
         o["proxy"] = px
-    ck = _cookies_text()
+    ck = "" if extra.get("_nocookies") else _cookies_text()
     if ck:
         cf = tmp / "cookies.txt"
         cf.write_text(ck)
@@ -200,6 +200,8 @@ def _opts(tmp: Path, extra: dict, proxy: str | None = None) -> dict:
     if ea:
         o["extractor_args"] = ea
     for k, v in extra.items():
+        if k == "_nocookies":
+            continue
         if k == "extractor_args":  # merge instead of replacing, so the PO token survives a client change
             merged = {**o.get("extractor_args", {})}
             for ie, kv in v.items():
@@ -219,11 +221,18 @@ def _playability(url: str) -> str | None:
     apart so the error we return is actionable instead of "retry later" when retrying is useless.
     """
     try:
-        req = urllib.request.Request(url, headers={
+        hdr = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
-        })
+        }
+        try:
+            jar = _cookie_jar()
+            if jar:
+                hdr["Cookie"] = "; ".join(f"{k}={v}" for k, v in jar.items())
+        except Exception:  # noqa: BLE001
+            pass
+        req = urllib.request.Request(url, headers=hdr)
         with urllib.request.urlopen(req, timeout=12) as r:
             body = r.read(3_000_000).decode("utf-8", "replace")
     except Exception:  # noqa: BLE001  -- the probe is best effort
@@ -232,13 +241,27 @@ def _playability(url: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _age_gated(url: str) -> bool:
+    """True only when the watch page says the video itself needs an adult account. A datacenter bot check also returns
+    LOGIN_REQUIRED, but with the reason "Sign in to confirm you're not a bot": that one IS fixable by another client,
+    so it must not stop the retry chain."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"})
+        with urllib.request.urlopen(req, timeout=12) as r:
+            body = r.read(3_000_000).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return False
+    m = re.search(r'"playabilityStatus":\{"status":"(?:LOGIN_REQUIRED|AGE_VERIFICATION_REQUIRED|AGE_CHECK_REQUIRED)","reason":"([^"]{0,200})', body)
+    return bool(m and re.search(r"\bage\b|inappropriate", m[1], re.I))
+
+
 def _err(e: Exception, url: str | None = None) -> HTTPException:
     msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e))
     low = msg.lower()
     if "sign in to confirm" in low or "not a bot" in low or "confirm you" in low:
         # Same wording for "your IP is throttled" and "this video needs an account": probe to tell them apart.
         status = _playability(url) if url else None
-        if status in ("LOGIN_REQUIRED", "AGE_VERIFICATION_REQUIRED", "AGE_CHECK_REQUIRED"):
+        if status in ("LOGIN_REQUIRED", "AGE_VERIFICATION_REQUIRED", "AGE_CHECK_REQUIRED") and _age_gated(url):
             return HTTPException(403, "This video is age-restricted or only playable while signed in, so YouTube "
                                       "refuses anonymous downloads of it. Retrying will not help: set YT_COOKIES "
                                       "(a cookies.txt exported from a signed-in private window) to download it.")
@@ -256,7 +279,21 @@ def _err(e: Exception, url: str | None = None) -> HTTPException:
 # Default clients first (yt-dlp picks the best set for the current YouTube); on a block we walk through other player
 # clients. Order matters: clients that need no PO token and no sign-in come first. The old "tv" client is gone because
 # YouTube now answers it with "The page needs to be reloaded" for anonymous requests.
-CLIENT_CHAIN = [None, ["web_embedded", "tv_simply"], ["visionos"], ["web_safari", "mweb"], ["android_vr"], ["tv_samsung", "web"]]
+# A ("nocookies", [...]) entry retries without the cookie jar: a burned / flagged account cookie makes YouTube refuse
+# even clients that would work anonymously, so the last two attempts drop it (this is what keeps downloads working
+# with no paid fallback).
+CLIENT_CHAIN = [None, ["web_embedded", "tv_simply"], ["visionos"], ["web_safari", "mweb"], ["android_vr"], ["tv_samsung", "web"],
+                ("nocookies", ["android_vr", "web_embedded"]), ("nocookies", None)]
+
+
+def _chain_extra(clients) -> dict:
+    nock = isinstance(clients, tuple)
+    if nock:
+        clients = clients[1]
+    extra = {"extractor_args": _yt_args(clients)} if clients else {}
+    if nock:
+        extra["_nocookies"] = True
+    return extra
 
 # Errors that no other client / proxy can fix: stop immediately instead of burning 6 attempts.
 _PERMANENT = ("private video", "has been removed", "account associated", "been terminated", "copyright", "unsupported url",
@@ -286,7 +323,7 @@ def _with_clients(fn, attempts: int | None = None, url: str | None = None):
     ps = _proxies()
     chain = CLIENT_CHAIN[:attempts] if attempts else CLIENT_CHAIN
     for n, clients in enumerate(chain):
-        extra = {"extractor_args": _yt_args(clients)} if clients else {}
+        extra = _chain_extra(clients)
         proxy = ps[n % len(ps)] if ps else None
         try:
             return fn(extra, proxy)
@@ -296,7 +333,7 @@ def _with_clients(fn, attempts: int | None = None, url: str | None = None):
                 raise
             low = str(e).lower()
             if url and n == 0 and ("sign in to confirm" in low or "not a bot" in low):
-                if _playability(url) in ("LOGIN_REQUIRED", "AGE_VERIFICATION_REQUIRED", "AGE_CHECK_REQUIRED"):
+                if _age_gated(url):
                     raise  # permanent: needs cookies, not another client
             time.sleep(min(1.5 * n, 4))  # small, growing pause: hammering YouTube makes the block stick
     raise last
@@ -408,6 +445,7 @@ def _reusable(key):
 # Without any of those, a datacenter IP is usually bot-checked, so the hosted backends go first. A backend that failed
 # recently is moved to the back for a few minutes so users do not wait on something that is known to be blocked.
 _health: dict[str, float] = {}  # backend -> monotonic time until which it is considered down
+_last_error: dict[str, str] = {}  # backend -> last failure text (shown by /status so a silent fallback is visible)
 _fails: dict[str, int] = {}  # backend -> consecutive failures (drives the back-off)
 BACKOFF_BASE = 300   # first failure: 5 minutes down
 BACKOFF_MAX = 1800   # a backend that keeps failing is skipped for at most 30 minutes between probes
@@ -420,6 +458,7 @@ def _cooldown(backend: str) -> int:
 
 def _note(backend: str, ok: bool) -> None:
     if ok:
+        _last_error.pop(backend, None)
         _health.pop(backend, None)
         _fails.pop(backend, None)
     else:
@@ -463,6 +502,7 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
         if (hit := _reusable(key)):
             return _served(hit)
         info = path = None
+        served = None
         knight.last_error = None
         errors: list[str] = []
         yt = knight.is_youtube(url)
@@ -484,11 +524,13 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
                         asyncio.to_thread(_download, url, kind, quality, kbps,
                                           1 if (_fails.get("ytdlp") and len(order) > 1) else attempts), timeout=240)
                 _note(backend, True)
+                served = backend
             except HTTPException as e:
                 if e.status_code == 413:
                     raise
                 _note(backend, False)
                 errors.append(f"{backend}: {e.detail}")
+                _last_error[backend] = str(e.detail)[:300]
                 if backend == "ytdlp" and len(order) == 1:
                     raise
             except asyncio.TimeoutError:
@@ -496,12 +538,14 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
                 if len(order) == 1:
                     raise HTTPException(504, "Download timed out")
                 errors.append(f"{backend}: timed out")
+                _last_error[backend] = "timed out"
             except Exception as e:  # noqa: BLE001
                 he = _err(e, url)
                 if he.status_code in (400, 403) or len(order) == 1:  # private / unsupported / the only engine: say so plainly
                     raise he
                 _note(backend, False)
                 errors.append(f"{backend}: {he.detail}")
+                _last_error[backend] = str(he.detail)[:300]
         if path is None:
             tried = ", ".join(order)
             if yt and any("bot check" in x or "blocked" in x for x in errors):
@@ -515,14 +559,15 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
     ctype = "audio/mpeg" if kind == "audio" else "video/mp4"
     work_dir = path.parent
     if stream:
-        return FileResponse(path, media_type=ctype, filename=f"{name}.{ext}",
+        return FileResponse(path, media_type=ctype, filename=f"{name}.{ext}", headers={"X-Served-By": served or ""},
                             background=BackgroundTask(shutil.rmtree, work_dir, ignore_errors=True))
     f = save_path(path, f"{name}.{ext}", ctype, config.MEDIA_TTL_MINUTES)
     shutil.rmtree(work_dir, ignore_errors=True)
     if len(_reuse) > 200:
         _reuse.clear()
     _reuse[key] = (info, f)
-    return {"success": True, "type": kind, **_brief(info), "file": f, "expires_in_minutes": config.MEDIA_TTL_MINUTES}
+    return {"success": True, "type": kind, **_brief(info), "file": f, "expires_in_minutes": config.MEDIA_TTL_MINUTES,
+            "served_by": served}
 
 
 _info_cache = TTLCache(maxsize=100, ttl=600)
@@ -593,6 +638,7 @@ async def status():
                              "https://video-download-api.com/dashboard") if ytfallback.vda_key_invalid else None},
             "backend_order": _backend_order("https://www.youtube.com/watch?v=x"),
             "backend_failures": dict(_fails),
+            "backend_last_error": dict(_last_error),
             "backend_down_for_s": {k: int(v - time.monotonic()) for k, v in _health.items() if v > time.monotonic()}}
 
 
@@ -619,10 +665,12 @@ async def download(url: str, type: str = Query("video", pattern="^(audio|video)$
 
 
 @router.get("/diagnose")
-async def diagnose(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
+async def diagnose(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ", download: str | None = Query(None, pattern="^(audio|video)$")):
     """Owner-facing check: try each yt-dlp player client once and report the raw error of each, plus whether the
     PO-token provider is reachable. Use it to see WHY YouTube is blocking this server (cookies rejected, no PO token,
-    IP flagged) instead of guessing from the generic message. Never reveals cookie values."""
+    IP flagged) instead of guessing from the generic message. Never reveals cookie values.
+    `download=audio|video` goes further and really downloads through yt-dlp only (no VDA / Cobalt), so you see the
+    exact error of the download step, which is where a blocked host usually fails after the metadata call worked."""
     await _check_url(url)
     url = knight.canonical(url)
 
@@ -646,22 +694,30 @@ async def diagnose(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
         out = []
         ps = _proxies()
         for n, clients in enumerate(CLIENT_CHAIN):
-            extra = {"extractor_args": _yt_args(clients)} if clients else {}
+            extra = _chain_extra(clients)
             t0 = time.monotonic()
+            label = clients if not isinstance(clients, tuple) else "nocookies:" + str(clients[1] or "default")
             try:
+                if download:
+                    _, fp = _download_once(url, download, 360, extra, ps[n % len(ps)] if ps else None)
+                    size = fp.stat().st_size
+                    shutil.rmtree(fp.parent, ignore_errors=True)
+                    out.append({"clients": label or "default", "ok": True, "downloaded_bytes": size,
+                                "seconds": round(time.monotonic() - t0, 1)})
+                    break
                 with tempfile.TemporaryDirectory() as d:
                     with yt_dlp.YoutubeDL(_opts(Path(d), {"skip_download": True, **extra}, ps[n % len(ps)] if ps else None)) as y:
                         i = y.extract_info(url, download=False)
-                out.append({"clients": clients or "default", "ok": True, "title": i.get("title"),
+                out.append({"clients": label or "default", "ok": True, "title": i.get("title"),
                             "formats": len(i.get("formats") or []), "seconds": round(time.monotonic() - t0, 1)})
                 break
             except Exception as e:  # noqa: BLE001
                 msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e))
-                out.append({"clients": clients or "default", "ok": False, "error": msg[-260:],
+                out.append({"clients": label or "default", "ok": False, "error": msg[-400:],
                             "seconds": round(time.monotonic() - t0, 1)})
         return out
 
-    attempts = await asyncio.wait_for(asyncio.to_thread(run), timeout=170)
+    attempts = await asyncio.wait_for(asyncio.to_thread(run), timeout=170 if not download else 280)
     return {"url": url, "cookies_loaded": bool(_cookies_text()), "proxy_set": bool(_proxies()),
             "pot_provider": await asyncio.to_thread(probe_provider), "pot_autostart": __import__("app.potserver", fromlist=["state"]).state, "pot_log_tail": pot_log(),
             "playability": await asyncio.to_thread(_playability, url), "attempts": attempts}
