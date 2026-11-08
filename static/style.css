@@ -205,6 +205,12 @@ pre.json{
 .media{display:grid;grid-template-columns:170px 1fr;gap:20px}
 .media img{width:100%;border-radius:10px;aspect-ratio:16/9;object-fit:cover;background:var(--hover)}
 .media h2{margin:0 0 3px;font:700 20px/1.25 var(--display);letter-spacing:-.01em}
+/* result cards are links: inherit the heading colour instead of the browser's blue */
+.media h2 a{color:inherit;text-decoration:none;border-bottom:1px solid transparent}
+.media h2 a:hover{color:var(--red);border-bottom-color:var(--red)}
+.media img{max-height:340px}
+/* engine table + licence pills read better with a little breathing room */
+.pill.bad{background:var(--warn-soft);color:var(--warn)}
 .meta{color:var(--ink2);font-size:13.5px;margin-bottom:12px}
 .media audio,.media video{width:100%;margin:8px 0 14px;border-radius:10px}
 .swatches{display:flex;flex-wrap:wrap;gap:10px}
