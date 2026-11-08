@@ -26,6 +26,23 @@ const bytes = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, 
 const mins = s => s ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : '';
 function saveBlob(blob, name) { const u = URL.createObjectURL(blob); const a = el('a', { href: u, download: name }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 5000); }
 
+/* Save one file from an API JSON response ({file:{download_url,filename,size}}) in a click. */
+async function grab(url, btn, label) {
+  const was = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Fetching…';
+  try {
+    const j = await api(url);
+    if (!j.file) throw new Error('No file in the response');
+    const { blob } = await api(j.file.download_url, { blob: true });
+    saveBlob(blob, j.file.filename);
+    btn.textContent = 'Saved · ' + bytes(j.file.size);
+    toast(label ? label : 'Saved ' + j.file.filename);
+  } catch (e) {
+    btn.textContent = was;
+    toast('Failed: ' + e.message);
+  } finally { btn.disabled = false; }
+}
+
 /* ---------- renderers ---------- */
 const R = {
   invoice: d => el('div', { class: 'card' }, el('div', { class: 'bar' }, el('span', {}, `Total ${d.invoice.currency} ${d.invoice.total.toFixed(2)} · due ${d.invoice.due_date}`), el('button', { class: 'sm', onclick: () => saveBlob(new Blob([d.html], { type: 'text/html' }), (d.invoice.number || 'invoice') + '.html') }, 'Download')), el('iframe', { sandbox: '', srcdoc: d.html, style: 'width:100%;height:480px;border:0;background:#fff' }), copyBar('JSON', JSON.stringify(d.invoice, null, 2))),
@@ -125,6 +142,155 @@ const R = {
         el('button', { class: 'sm danger', onclick: async () => { await api('/v1/files/' + f.id, { method: 'DELETE' }); draw(items.filter(x => x.id !== f.id)); } }, 'Delete'))))) : el('div', { class: 'empty' }, 'No files yet. Upload one or run a download.')); };
     draw(d.files); return box;
   },
+
+  sources: d => el('div', { class: 'card' },
+    el('table', {}, el('tr', {}, ['Source', 'Status', 'Kinds', 'Licence'].map(h => el('th', {}, h))),
+      (d.sources || []).map(x => el('tr', {},
+        el('td', {}, el('b', {}, x.name)),
+        el('td', {}, el('span', { class: 'pill' + (x.enabled ? '' : ' bad') }, x.enabled ? 'on' : (x.key ? 'needs ' + x.key : 'off'))),
+        el('td', {}, (x.kinds || []).join(', ') || '-'),
+        el('td', { class: 'meta' }, x.license || ''))))),
+  freemedia: d => {
+    const items = d.results || [];
+    const one = m => {
+      const q = el('div', { class: 'actions', style: 'margin-top:10px' });
+      const meta = el('div', { class: 'meta' }, [m.source, m.kind, m.author, m.license, m.commercial_use ? 'commercial use OK' : 'non-commercial only'].filter(Boolean).join('  ·  '));
+      const api = el('div', { class: 'meta mono', style: 'word-break:break-all' }, '/v1/free/download?id=' + m.id);
+      [['medium', 'Get file'], ['small', 'Small'], ['tiny', 'Tiny']].forEach(([quality, label]) => {
+        const b = el('button', { class: 'sm' }, label);
+        b.addEventListener('click', () => grab('/v1/free/download?' + qs({ id: m.id, quality }), b, 'Saved ' + (m.title || m.id)));
+        q.append(b);
+      });
+      if (m.page_url) q.append(el('a', { class: 'sm', href: m.page_url, target: '_blank', rel: 'noopener' }, 'Source page'));
+      return el('div', { class: 'card media' },
+        m.thumbnail ? el('img', { src: m.thumbnail, alt: '', referrerpolicy: 'no-referrer', loading: 'lazy' }) : el('div'),
+        el('div', {}, el('h2', {}, m.title || m.id), meta,
+          m.attribution ? el('div', { class: 'meta', style: 'font-style:italic' }, m.attribution) : '',
+          q, api));
+    };
+    const head = items.length ? el('div', { class: 'meta', style: 'margin-bottom:10px' }, `${d.count} result${d.count === 1 ? '' : 's'}`) : null;
+    const err = d.errors ? el('div', { class: 'card err' }, el('b', {}, 'Some sources failed'), JSON.stringify(d.errors)) : null;
+    return el('div', {}, ...[err, head, ...items.map(one)].filter(Boolean),
+      items.length ? '' : el('div', { class: 'empty card' }, 'Nothing found. Try a broader word or another source.'));
+  },
+  stock: d => {
+    const items = d.results || [];
+    const one = m => {
+      const b = el('button', { class: 'sm' }, 'Download');
+      b.addEventListener('click', () => grab('/v1/stock/download?' + qs({ id: m.id, quality: 'medium' }), b, 'Saved ' + m.id));
+      return el('div', { class: 'card media' },
+        m.thumbnail ? el('img', { src: m.thumbnail, alt: '', loading: 'lazy' }) : el('div'),
+        el('div', {}, el('h2', {}, (m.tags || []).slice(0, 3).join(', ') || m.id),
+          el('div', { class: 'meta' }, [m.kind, m.author, m.duration ? mins(m.duration) : (m.width ? m.width + '×' + m.height : ''), m.views != null ? Number(m.views).toLocaleString() + ' views' : ''].filter(Boolean).join('  ·  ')),
+          m.qualities ? el('div', { class: 'meta' }, 'Qualities: ' + Object.keys(m.qualities).join(', ')) : '',
+          el('div', { class: 'actions', style: 'margin-top:10px' }, b, m.page_url ? el('a', { class: 'sm', href: m.page_url, target: '_blank', rel: 'noopener' }, 'Pixabay') : ''),
+          el('div', { class: 'meta' }, 'Pixabay licence: free for commercial use, attribution not required.')));
+    };
+    const head = items.length ? el('div', { class: 'meta', style: 'margin-bottom:10px' }, `${d.total} hits, showing ${items.length}`) : null;
+    return el('div', {}, ...[head, ...items.map(one)].filter(Boolean),
+      items.length ? '' : el('div', { class: 'empty card' }, 'Nothing found.'));
+  },
+  filecard: d => {
+    const f = d.file || {};
+    const ext = String(f.filename || '').split('.').pop().toLowerCase();
+    const holder = el('div', { class: 'actions', style: 'margin:10px 0' }, el('div', { class: 'loading' }, el('i'), el('i'), el('i'), 'Fetching file…'));
+    api(f.download_url, { blob: true }).then(({ blob }) => {
+      const u = URL.createObjectURL(blob);
+      const view = /^(mp4|webm|mov|ogv)$/.test(ext) ? el('video', { src: u, controls: '' })
+        : /^(mp3|wav|ogg|oga|m4a|flac|opus)$/.test(ext) ? el('audio', { src: u, controls: '', style: 'width:100%' })
+        : /^(jpg|jpeg|png|gif|webp|svg|tif|tiff)$/.test(ext) ? el('img', { src: u, alt: '', style: 'max-height:320px' }) : null;
+      holder.replaceChildren(...[view, el('button', { class: 'go', onclick: () => saveBlob(blob, f.filename) }, `Save ${ext ? ext.toUpperCase() : 'file'} (${bytes(f.size)})`)].filter(Boolean));
+    }).catch(e => holder.replaceChildren(el('div', { class: 'err' }, e.message)));
+    return el('div', { class: 'card media' }, d.thumbnail ? el('img', { src: d.thumbnail, alt: '', referrerpolicy: 'no-referrer' }) : el('div'),
+      el('div', {}, el('h2', {}, d.title || f.filename || d.id || 'File'),
+        el('div', { class: 'meta' }, [d.source, d.kind, d.author, d.license].filter(Boolean).join('  ·  ')),
+        d.attribution ? el('div', { class: 'meta', style: 'font-style:italic' }, d.attribution) : '',
+        holder,
+        el('div', { class: 'meta' }, `Link works for ${d.expires_in_minutes || 10} minutes.`),
+        d.page_url ? el('a', { class: 'sm', href: d.page_url, target: '_blank', rel: 'noopener' }, 'Source page') : ''));
+  },
+  ytsearch: d => {
+    const items = d.results || [];
+    const one = m => {
+      const id = m.id || (String(m.url || '').match(/[?&]v=([\w-]{11})/) || [])[1] || '';
+      const th = (m.thumbnails && (m.thumbnails.high || m.thumbnails.medium || m.thumbnails.default)) || m.thumbnail;
+      const dur = m.duration_seconds ? mins(m.duration_seconds) : (typeof m.duration === 'string' ? m.duration : '');
+      const dl = el('button', { class: 'sm' }, 'Download MP3');
+      if (id) dl.addEventListener('click', () => grab('/v1/media/ytmp3?' + qs({ url: 'https://www.youtube.com/watch?v=' + id }), dl, 'Saved MP3'));
+      else dl.disabled = true;
+      return el('div', { class: 'card media' }, th ? el('img', { src: th, alt: '', loading: 'lazy' }) : el('div'),
+        el('div', {}, el('h2', {}, el('a', { href: m.url || ('https://www.youtube.com/watch?v=' + id), target: '_blank', rel: 'noopener' }, m.title || id || 'Untitled')),
+          el('div', { class: 'meta' }, [m.channel, dur, m.views != null ? Number(m.views).toLocaleString() + ' views' : '', m.live ? 'live' : ''].filter(Boolean).join('  ·  ')),
+          m.description ? el('p', {}, String(m.description).slice(0, 220)) : '',
+          el('div', { class: 'actions', style: 'margin-top:10px' }, dl,
+            el('button', { class: 'sm', onclick: () => open('yt-video', { url: 'https://www.youtube.com/watch?v=' + id }) }, 'Details'))));
+    };
+    return el('div', {}, d.source === 'keyless' ? el('div', { class: 'card', style: 'border-color:var(--warn)' }, el('b', {}, 'Keyless route'), ' ', d.note || '') : '',
+      items.length ? items.map(one) : el('div', { class: 'empty card' }, 'No results.'));
+  },
+  ytvideo: d => {
+    const th = (d.thumbnails && (d.thumbnails.maxres || d.thumbnails.high)) || d.thumbnail;
+    const stats = [d.channel || d.uploader, d.duration_string || (d.duration ? mins(d.duration) : (d.duration_seconds ? mins(d.duration_seconds) : '')),
+      d.view_count != null ? Number(d.view_count).toLocaleString() + ' views' : '', d.like_count != null ? Number(d.like_count).toLocaleString() + ' likes' : '',
+      d.upload_date].filter(Boolean).join('  ·  ');
+    const heads = el('div', { class: 'actions', style: 'margin:10px 0' });
+    [['audio', 'MP3'], ['video', 'MP4 360p']].forEach(([type, label]) => {
+      const b = el('button', { class: 'sm' }, 'Download ' + label);
+      b.addEventListener('click', () => grab('/v1/media/download?' + qs({ url: d.url || ('https://www.youtube.com/watch?v=' + d.id), type, quality: 360 }), b, 'Saved ' + label));
+      heads.append(b);
+    });
+    if (d.url) heads.append(el('a', { class: 'sm', href: d.url, target: '_blank', rel: 'noopener' }, 'Open on YouTube'));
+    const fmts = (d.formats || []).filter(f => f.ext !== 'mhtml');
+    return el('div', { class: 'card media' }, th ? el('img', { src: th, alt: '', loading: 'lazy' }) : el('div'),
+      el('div', {}, el('h2', {}, d.title || d.id), el('div', { class: 'meta' }, stats),
+        d.partial ? el('div', { class: 'meta', style: 'color:var(--warn)' }, d.partial_reason || 'Partial metadata (oEmbed only).') : '',
+        d.heights?.length ? el('div', { class: 'meta' }, 'Video heights: ' + d.heights.map(h => h + 'p').join(', ')) : '',
+        heads,
+        d.description ? el('p', {}, String(d.description).slice(0, 400)) : '',
+        fmts.length ? el('details', {}, el('summary', {}, `${fmts.length} formats`),
+          el('table', {}, el('tr', {}, ['id', 'ext', 'kind', 'res', 'kbps', 'size'].map(h => el('th', {}, h))),
+            fmts.slice(0, 40).map(f => el('tr', {}, el('td', { class: 'mono' }, f.format_id), el('td', {}, f.ext),
+              el('td', {}, f.has_video && f.has_audio ? 'audio+video' : f.has_video ? 'video' : 'audio'),
+              el('td', {}, f.height ? f.height + 'p' : (f.resolution || '-')),
+              el('td', {}, f.abr || f.tbr || '-'), el('td', {}, f.filesize ? bytes(f.filesize) : '-'))))) : ''));
+  },
+  comments: d => el('div', {}, (d.comments || []).length ? d.comments.map(c => el('div', { class: 'card' },
+    el('div', { class: 'meta' }, [c.author, c.likes != null ? c.likes + ' likes' : '', c.replies ? c.replies + ' replies' : ''].filter(Boolean).join('  ·  ')),
+    el('div', { class: 'text' }, c.text || ''))) : el('div', { class: 'empty card' }, 'No comments.')),
+  tracks: d => {
+    const items = d.results || d.tracks || d.artists || d.albums || (d.id ? [d] : []);
+    const one = m => {
+      const cover = m.cover || m.image;
+      const sub = [m.artist || m.name, m.album, m.release_date, m.duration_seconds ? mins(m.duration_seconds) : '',
+        m.fans != null ? Number(m.fans).toLocaleString() + ' fans' : '', m.tracks ? m.tracks + ' tracks' : '',
+        m.genre].filter(Boolean).join('  ·  ');
+      return el('div', { class: 'card media' }, cover ? el('img', { src: cover, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : el('div'),
+        el('div', {}, el('h2', {}, m.title || m.name || m.id), el('div', { class: 'meta' }, sub),
+          m.genres?.length ? el('div', { class: 'meta' }, m.genres.join(', ')) : '',
+          m.preview_url ? el('audio', { src: m.preview_url, controls: '', preload: 'none', style: 'width:100%;margin:8px 0' }) : '',
+          el('div', { class: 'actions' }, [['Track', 'mi-track', m.id], ['Artist', 'mi-artist', m.artist_id], ['Album', 'mi-album', m.album_id]]
+            .filter(([, , id]) => id).map(([label, tool, id]) => el('button', { class: 'sm', onclick: () => open(tool, { id }) }, label)),
+            m.url ? el('a', { class: 'sm', href: m.url, target: '_blank', rel: 'noopener' }, 'Open') : ''),
+          el('div', { class: 'meta mono' }, m.id)));
+    };
+    return el('div', {}, d.errors ? el('div', { class: 'card err' }, el('b', {}, 'Some sources failed'), JSON.stringify(d.errors)) : '',
+      items.length ? items.map(one) : el('div', { class: 'empty card' }, 'Nothing found.'));
+  },
+  album: d => el('div', { class: 'card media' }, d.cover ? el('img', { src: d.cover, alt: '', referrerpolicy: 'no-referrer' }) : el('div'),
+    el('div', {}, el('h2', {}, d.title || d.id),
+      el('div', { class: 'meta' }, [d.artist, d.release_date, d.label, d.tracks ? d.tracks + ' tracks' : '', d.record_type].filter(Boolean).join('  ·  ')),
+      d.genres?.length ? el('div', { class: 'meta' }, d.genres.join(', ')) : '',
+      el('ol', { style: 'margin:12px 0 0;padding-left:20px' }, (d.track_list || []).map(t => el('li', {},
+        el('b', {}, t.title || ''), ' ', el('span', { class: 'meta' }, t.duration_seconds ? mins(t.duration_seconds) : '')))))),
+  engines: d => el('div', { class: 'card' },
+    el('p', { class: 'lede' }, d.works_without_keys ? 'Downloads run on the self-hosted yt-dlp engine. Every paid or third-party engine below is optional.' : ''),
+    el('table', {}, el('tr', {}, ['Engine', 'State', 'What it is'].map(h => el('th', {}, h))),
+      Object.entries(d.engines || {}).map(([name, e]) => el('tr', {},
+        el('td', {}, el('b', {}, name)),
+        el('td', {}, el('span', { class: 'pill' + (e.ready ? '' : ' bad') }, e.ready ? 'ready' : 'off')),
+        el('td', { class: 'meta' }, (e.self_hosted ? 'self-hosted · ' : (e.paid ? 'paid, optional · ' : '')) + (e.note || ''))))),
+    el('h4', {}, 'Backend order now'), el('div', { class: 'meta mono' }, (d.backend_order || []).join('  →  ')),
+    d.backend_last_error && Object.keys(d.backend_last_error).length ? el('pre', { class: 'json' }, JSON.stringify(d.backend_last_error, null, 2)) : ''),
 };
 function copyBar(label, text) { return el('div', { class: 'bar' }, el('span', {}, label), el('button', { class: 'sm', onclick: e => { navigator.clipboard.writeText(text); e.target.textContent = 'Copied'; setTimeout(() => e.target.textContent = 'Copy', 1500); } }, 'Copy')); }
 
@@ -159,6 +325,47 @@ const TOOLS = [
     fields: [T('url', 'Link', { ph: 'https://www.youtube.com/watch?v=…' }), S('type', 'Format', [['audio', 'MP3 audio'], ['video', 'MP4 video']]), S('quality', 'Video quality', Q, { def: '720', show: v => v.type === 'video' })], submit: 'Download',
     run: async v => ({ kind: 'media', data: await api('/v1/media/download?' + qs({ url: v.url, type: v.type, quality: v.quality })) }) },
   { g: 'Media', id: 'info', name: 'Video info', desc: 'Title, length, thumbnail and available qualities without downloading.', fields: [T('url', 'Link')], submit: 'Get info', run: get('/v1/media/info', 'info') },
+
+
+  /* ---- free media (NASA, Wikimedia Commons, Internet Archive, Pexels) ---- */
+  { g: 'Free media', id: 'free-sources', name: 'Free media sources', desc: 'Which public media libraries are switched on, what kinds of file they serve and under which licence.', fields: [], submit: 'Show sources', run: get('/v1/free/sources', 'sources') },
+  { g: 'Free media', id: 'free-search', name: 'Search free media', desc: 'Images, video and audio from NASA, Wikimedia Commons, Internet Archive and Pexels. Keyless, with the licence and attribution line on every result.',
+    fields: [T('q', 'What are you looking for', { def: 'moon', ph: 'aurora, cathedral, 1960s car' }),
+      S('source', 'Library', [['all', 'All'], ['nasa', 'NASA'], ['commons', 'Wikimedia Commons'], ['archive', 'Internet Archive'], ['pexels', 'Pexels (needs key)']]),
+      S('kind', 'Type', [['image', 'Images'], ['video', 'Video'], ['audio', 'Audio']]),
+      S('commercial_only', 'Licence', [['', 'Any open licence'], ['true', 'Commercial use allowed']]),
+      { k: 'limit', label: 'Results per library', type: 'number', def: 8 }],
+    submit: 'Search', run: get('/v1/free/search', 'freemedia') },
+  { g: 'Free media', id: 'free-dl', name: 'Download a free file', desc: 'Download by id, for example nasa:PIA12235 or commons:File:Cat.jpg. Big videos return 413: pick a smaller quality.', fields: [T('id', 'Media id', { ph: 'nasa:PIA12235' }), S('quality', 'Quality', [['medium', 'Medium'], ['small', 'Small'], ['tiny', 'Tiny'], ['large', 'Large']])], submit: 'Get file', run: get('/v1/free/download', 'filecard') },
+  { g: 'Free media', id: 'stock-search', name: 'Pixabay stock', desc: 'Stock video and photos from the official Pixabay API. Free for commercial use, no attribution needed. Needs a free PIXABAY_API_KEY.',
+    fields: [T('q', 'Search', { def: 'ocean', ph: 'ocean, coffee, city night' }), S('kind', 'Type', [['video', 'Video'], ['image', 'Images']]), S('order', 'Sort', [['popular', 'Popular'], ['latest', 'Latest']]), { k: 'per_page', label: 'Results', type: 'number', def: 12 }], submit: 'Search', run: get('/v1/stock/search', 'stock') },
+
+  /* ---- YouTube: works with no VDA key and no Google key ---- */
+  { g: 'YouTube', id: 'yt-search', name: 'Search YouTube', desc: 'Search by name. Runs on the self-hosted engine, so it works without a VDA key or a Google API key.',
+    fields: [T('query', 'Search', { def: 'lofi hip hop', ph: 'lofi hip hop' }), { k: 'limit', label: 'Results', type: 'number', def: 5 }], submit: 'Search', run: get('/v1/yt/search', 'ytsearch') },
+  { g: 'YouTube', id: 'yt-play', name: 'Download by name', desc: 'Search and download the first match as a small MP3 or MP4. If a result is blocked or removed, the next one is tried automatically.',
+    fields: [T('query', 'Search', { ph: 'song name or artist' }), S('type', 'Format', [['audio', 'MP3 audio'], ['video', 'MP4 video']]), S('quality', 'Video quality', Q, { def: '360', show: v => v.type === 'video' }), { k: 'index', label: 'Which result', type: 'number', def: 1 }],
+    submit: 'Download', run: async v => ({ kind: 'media', data: await api('/v1/yt/play?' + qs({ query: v.query, type: v.type, quality: v.quality, index: v.index })) }) },
+  { g: 'YouTube', id: 'yt-video', name: 'Video details', desc: 'Title, channel, stats, chapters and every format, with MP3 / MP4 download buttons.',
+    fields: [T('url', 'Link or 11-character id', { ph: 'https://www.youtube.com/watch?v=…' })], submit: 'Get details', run: get('/v1/yt/video', 'ytvideo') },
+  { g: 'YouTube', id: 'yt-formats', name: 'Available formats', desc: 'Every audio and video stream for a video, plus the best pick of each.', fields: [T('id', 'Video id', { ph: 'dQw4w9WgXcQ' })], submit: 'List formats', run: get('/v1/yt/formats', 'ytvideo') },
+  { g: 'YouTube', id: 'yt-api-search', name: 'Official API search', desc: 'The same search with the official YouTube Data API result shape. Works without a key too (keyless route); a key adds exact counts and channel/playlist search.',
+    fields: [T('q', 'Search', { def: 'aurora borealis' }), S('type', 'Type', [['video', 'Videos'], ['channel', 'Channels (needs key)'], ['playlist', 'Playlists (needs key)']]), { k: 'max', label: 'Results', type: 'number', def: 10 }], submit: 'Search', run: get('/v1/youtube/search', 'ytsearch') },
+  { g: 'YouTube', id: 'yt-api-video', name: 'Official API video', desc: 'Video metadata in the official videos.list shape. Keyless works too, with fewer fields.', fields: [T('id', 'Video id', { ph: 'dQw4w9WgXcQ' })], submit: 'Get video', run: get('/v1/youtube/video', 'ytvideo') },
+  { g: 'YouTube', id: 'yt-comments', name: 'Comments', desc: 'Top comments for a video. Needs YOUTUBE_API_KEY.', fields: [T('id', 'Video id', { ph: 'dQw4w9WgXcQ' }), { k: 'max', label: 'How many', type: 'number', def: 20 }], submit: 'Get comments', run: get('/v1/youtube/comments', 'comments') },
+  { g: 'YouTube', id: 'yt-quota', name: 'API quota', desc: 'Official API units spent today, or a note that the keyless route is in use.', fields: [], submit: 'Check quota', run: get('/v1/youtube/quota') },
+  { g: 'YouTube', id: 'yt-engines', name: 'Download engines', desc: 'What is available right now: self-hosted yt-dlp, the PO-token provider, Cobalt, VDA, KnightBot and the official API. Shows the order the API will try.',
+    fields: [], submit: 'Check engines', run: get('/v1/media/status', 'engines') },
+
+  /* ---- music metadata (Deezer + iTunes, keyless) ---- */
+  { g: 'Music info', id: 'mi-search', name: 'Music metadata search', desc: 'Tracks, artists and albums from Deezer and iTunes: cover art, release date, 30-second preview and store links. No key needed.',
+    fields: [T('q', 'Song, artist or album', { def: 'daft punk', ph: 'blinding lights' }), S('type', 'Search for', [['track', 'Tracks'], ['artist', 'Artists'], ['album', 'Albums']]), S('source', 'Source', [['all', 'Deezer + iTunes'], ['deezer', 'Deezer'], ['itunes', 'iTunes']]), { k: 'limit', label: 'Results', type: 'number', def: 10 }], submit: 'Search', run: get('/v1/music-info/search', 'tracks') },
+  { g: 'Music info', id: 'mi-track', name: 'Track details', desc: 'One track by id, for example deezer:3135556 or itunes:1440857781.', fields: [T('id', 'Track id', { ph: 'deezer:3135556' })], submit: 'Get track', run: get('/v1/music-info/track', 'tracks') },
+  { g: 'Music info', id: 'mi-artist', name: 'Artist profile', desc: 'Image, fan count and album count for an artist id.', fields: [T('id', 'Artist id', { ph: 'deezer:27' })], submit: 'Get artist', run: get('/v1/music-info/artist', 'tracks') },
+  { g: 'Music info', id: 'mi-artist-top', name: 'Top tracks', desc: 'The most popular tracks of an artist.', fields: [T('id', 'Artist id', { ph: 'deezer:27' }), { k: 'limit', label: 'How many', type: 'number', def: 10 }], submit: 'Get top tracks', run: get('/v1/music-info/artist/top', 'tracks') },
+  { g: 'Music info', id: 'mi-album', name: 'Album and track list', desc: 'Album details plus every track on it.', fields: [T('id', 'Album id', { ph: 'deezer:302127' })], submit: 'Get album', run: get('/v1/music-info/album', 'album') },
+  { g: 'Music info', id: 'mi-similar', name: 'Similar artists', desc: 'Deezer ids only.', fields: [T('id', 'Artist id', { ph: 'deezer:27' })], submit: 'Find similar', run: get('/v1/music-info/artist/similar', 'tracks') },
+  { g: 'Music info', id: 'mi-charts', name: 'Charts', desc: 'Current Deezer charts: tracks, albums and artists.', fields: [{ k: 'limit', label: 'How many', type: 'number', def: 20 }, { k: 'genre', label: 'Genre id (0 = all)', type: 'number', def: 0 }], submit: 'Get charts', run: get('/v1/music-info/charts', 'tracks') },
 
   { g: 'Music', id: 'm-search', name: 'Free music search', desc: 'Search openly licensed music (Internet Archive, ccMixter, Openverse, Audius CC tracks). Preview, download, and copy the attribution line.',
     fields: [T('q', 'Song, artist or mood', { ph: 'ambient piano' }), S('source', 'Source', [['all', 'All sources'], ['archive', 'Internet Archive'], ['ccmixter', 'ccMixter'], ['openverse', 'Openverse'], ['audius', 'Audius (CC)']]), S('commercial_only', 'Licence', [['false', 'Any open licence'], ['true', 'Commercial use allowed']]), { k: 'limit', label: 'Results per source', type: 'number', def: 5 }], submit: 'Search', run: get('/v1/music/search', 'music') },
@@ -260,12 +467,6 @@ const TOOLS = [
   { g: 'More', id: 'x-tweet', name: 'Tweet mock-up', desc: 'Tweet-style image for mock-ups and design drafts.', fields: [T('name', 'Name', { def: 'Sam' }), T('username', 'Username', { def: 'sam' }), { k: 'text', label: 'Text', type: 'textarea' }, T('pic', 'Picture URL (optional)'), S('verified', 'Verified', [['false', 'No'], ['true', 'Yes']]), { k: 'likes', label: 'Likes', type: 'number', def: 120 }, S('theme', 'Theme', [['dim', 'Dim'], ['dark', 'Dark'], ['light', 'Light']])], submit: 'Create image', run: async v => { const r = await api('/v1/fake/tweet?' + qs(v), { blob: true }); return { kind: 'image', data: { blob: r.blob, name: 'tweet.png' } }; } },
   { g: 'More', id: 'x-ytc', name: 'YouTube comment mock-up', desc: 'Comment-style image for mock-ups and design drafts.', fields: [T('name', 'Name', { def: 'Sam' }), { k: 'text', label: 'Comment', type: 'textarea' }, T('pic', 'Picture URL (optional)'), { k: 'likes', label: 'Likes', type: 'number', def: 42 }, T('time', 'Time', { def: '1 hour ago' })], submit: 'Create image', run: async v => { const r = await api('/v1/fake/ytcomment?' + qs(v), { blob: true }); return { kind: 'image', data: { blob: r.blob, name: 'ytcomment.png' } }; } },
   { g: 'More', id: 'x-fun', name: 'Fun lines', desc: 'Joke, meme, roast, insult, compliment or flirt line.', fields: [S('kind', 'Kind', ['joke', 'meme', 'roast', 'insult', 'compliment', 'flirt'].map(x => [x, x]))], submit: 'Get one', run: async v => ({ kind: 'json', data: await api('/v1/fun/' + v.kind) }) },
-  { g: 'More', id: 'x-ytsearch', name: 'YouTube search', desc: 'Find a video by name. Copy the link into the downloader.', fields: [T('query', 'Search', { ph: 'shape of you' }), { k: 'limit', label: 'Results', type: 'number', def: 5 }], submit: 'Search', run: get('/v1/yt/search') },
-  { g: 'More', id: 'x-play', name: 'Download by name', desc: 'Type a song or video name. Gets the first YouTube match as MP3 or MP4.', fields: [T('query', 'Name', { ph: 'shape of you' }), S('type', 'Format', [['audio', 'MP3 audio'], ['video', 'MP4 video']]), S('quality', 'Video quality', Q, { def: '480', show: v => v.type === 'video' })], submit: 'Download',
-    run: async v => ({ kind: 'media', data: await api('/v1/yt/play?' + qs({ query: v.query, type: v.type, quality: v.quality })) }) },
-  { g: 'More', id: 'x-ytvideo', name: 'YouTube video details', desc: 'Full metadata for a video: channel, stats, chapters, thumbnails and every format.', fields: [T('url', 'Video link', { ph: 'https://www.youtube.com/watch?v=…' })], submit: 'Get details', run: get('/v1/yt/video') },
-  { g: 'More', id: 'x-ytformats', name: 'YouTube formats', desc: 'Just the audio and video formats and the best pick of each.', fields: [T('url', 'Video link', { ph: 'https://www.youtube.com/watch?v=…' })], submit: 'List formats', run: get('/v1/yt/formats') },
-
   { g: 'Utilities', id: 'mail', name: 'Email check', desc: 'Checks format, mail server and disposable domains. Does not contact the mailbox.', fields: [T('email', 'Email address')], submit: 'Check', run: get('/v1/utils/email-validate') },
   { g: 'Utilities', id: 'dns', name: 'DNS lookup', desc: 'Records for a domain, plus whether SPF and DMARC are set.', fields: [T('domain', 'Domain', { ph: 'yourshop.com' })], submit: 'Look up', run: get('/v1/utils/dns') },
   { g: 'Utilities', id: 'cur', name: 'Currency', desc: 'Live exchange rates.', fields: [T('from', 'From', { def: 'USD' }), T('to', 'To', { def: 'EUR' }), { k: 'amount', label: 'Amount', type: 'number', def: 100 }], submit: 'Convert', run: get('/v1/utils/currency') },
@@ -388,9 +589,12 @@ const GROUP_INFO = {
   'Dev tools': 'Encoders, formatters, regex, JWT, diffs and more', 'Web check': 'Status, headers, robots.txt and SSL for any site',
   Jobs: 'Search remote job boards and read the market', Info: 'Weather, holidays, crypto, wiki, books and local time',
   More: 'Lyrics, screenshots, cutouts, cards and fun', Cards: 'Welcome and goodbye cards for your community', Account: 'Your usage and downloader health',
+  'Free media': 'NASA, Wikimedia Commons, Internet Archive, Pexels and Pixabay — keyless and licensed',
+  YouTube: 'Search, inspect and download — self-hosted, no VDA key needed',
+  'Music info': 'Deezer + iTunes metadata, covers and 30-second previews',
 };
-const FEATURED = new Set(['Media', 'AI', 'Business', 'Anime']);
-const QUICK = [['dl', 'Download a video'], ['x-rmbg', 'Remove a background'], ['i-weather', 'Weather'], ['b-inv', 'Build an invoice'], ['a-rec', 'Anime recommendations'], ['desc', 'Write a product description'], ['qr', 'Make a QR code']];
+const FEATURED = new Set(['Media', 'YouTube', 'Free media', 'AI', 'Music info', 'Business', 'Anime']);
+const QUICK = [['dl', 'Download a video'], ['free-search', 'Find free media'], ['mi-search', 'Music metadata'], ['yt-engines', 'Check engines'], ['x-rmbg', 'Remove a background'], ['i-weather', 'Weather'], ['b-inv', 'Build an invoice'], ['a-rec', 'Anime recommendations'], ['desc', 'Write a product description'], ['qr', 'Make a QR code']];
 function home() {
   current = null;
   history.replaceState(null, '', '#home');
@@ -415,13 +619,13 @@ function home() {
         el('p', {}, GROUP_INFO[g] || ts.slice(0, 3).map(t => t.name).join(', ')),
         el('span', { class: 'ex' }, ts.slice(0, 3).map(t => t.name).join(' · ')));
     })));
-    if (!getKey()) body.append(el('div', { class: 'keyhint' }, 'Paste your API key in the box at the top and press Save. Every tool on this page uses it.'));
+    if (!getKey()) body.append(el('div', { class: 'keyhint' }, 'Paste your API key in the box at the top and press Save. Every tool on this page uses it — no VDA or Google key required.'));
   };
   input.addEventListener('input', draw);
   input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const f = body.querySelector('.res'); if (f) f.click(); } });
   const hero = el('div', { class: 'hero' },
     el('div', {}, el('h1', {}, 'Find the tool, get the result.'),
-      el('p', { class: 'lede' }, `${TOOLS.length} tools across ${groups.length} groups, all behind one key. Search, or pick a group below.`),
+      el('p', { class: 'lede' }, `${TOOLS.length} tools across ${groups.length} groups, one key. Media, music, images and YouTube work with no extra service — the paid engines are optional fallbacks.`),
       el('div', { class: 'bigsearch', html: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>' }, input, el('span', { class: 'kbd' }, '/')),
       el('div', { class: 'quick' }, QUICK.filter(([id]) => TOOLS.some(t => t.id === id)).map(([id, label]) => el('button', { type: 'button', onclick: () => open1(id) }, label)))),
     el('span', { html: MARK(176, 'mark heromark') }));
@@ -444,7 +648,7 @@ async function refreshUsage() {
     box.classList.toggle('warn', u.used / u.limit > 0.8);
   } catch { box.hidden = true; }
 }
-function open(id) {
+function open(id, preset = {}) {
   if (!id || id === 'home' || !TOOLS.some(t => t.id === id)) return home();
   current = TOOLS.find(t => t.id === id);
   COLLAPSED.delete(current.g);  // always show the group you are working in
@@ -456,7 +660,7 @@ function open(id) {
   const refresh = () => current.fields.forEach(f => { if (f.show) wrap[f.k].style.display = f.show(vals) ? '' : 'none'; });
   const grid = el('div', { class: 'row' });
   current.fields.forEach(f => {
-    vals[f.k] = f.def ?? (f.type === 'select' ? f.opts[0][0] : '');
+    vals[f.k] = preset[f.k] ?? f.def ?? (f.type === 'select' ? f.opts[0][0] : '');
     let inp;
     if (f.type === 'textarea') inp = el('textarea', { id: 'f_' + f.k, placeholder: f.ph || '' });
     else if (f.type === 'select') inp = el('select', { id: 'f_' + f.k }, f.opts.map(([v, l]) => el('option', { value: v }, l)));

@@ -11,3 +11,6 @@ cookies.txt
 *.cookies.txt
 .pytest_cache/
 __pycache__/
+
+# local scratch (UI patch + smoke scripts)
+work/

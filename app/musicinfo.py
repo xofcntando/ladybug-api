@@ -6,7 +6,7 @@
     GET /v1/music-info/artist/top?id=deezer:27&limit=10
     GET /v1/music-info/artist/similar?id=deezer:27
     GET /v1/music-info/album?id=deezer:302127            (with track list)
-    GET /v1/music-info/charts?country=&limit=20           (Deezer worldwide top tracks/albums/artists)
+    GET /v1/music-info/charts?limit=20&genre=0            (Deezer top tracks/albums/artists)
 
 Ids are "source:number". Each result has cover art, a 30 s preview URL (play it in an <audio> tag, do not redistribute it)
 and a link to the track on the source's own site. Responses are cached MUSICINFO_CACHE_MINUTES (default 60).

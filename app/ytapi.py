@@ -1,9 +1,12 @@
-"""Official YouTube Data API v3 (metadata only: search, video, channel, playlist, comments).
+"""YouTube metadata: the official Data API v3 when a key is set, a keyless route when it is not.
 
-Uses YOUTUBE_API_KEY (or several, comma separated in YOUTUBE_API_KEYS, rotated when one runs out of quota).
-This is the official, never-blocked route for YouTube data. It does not download media.
-Responses are cached (YT_API_CACHE_MINUTES, default 60) because the free quota is 10,000 units/day:
-search costs 100 units, every other call here costs 1.
+With YOUTUBE_API_KEY (or several, comma separated in YOUTUBE_API_KEYS, rotated when one runs out of quota)
+every endpoint answers from the official API: the never-blocked route, cached YT_API_CACHE_MINUTES (60) because
+the free quota is 10,000 units/day (search = 100 units, everything else 1).
+
+Without a key, `search` and `video` still answer, through the keyless route (yt-dlp -> YouTube results page ->
+oEmbed) and flag themselves with `"source": "keyless"`. Channel, playlist and comments have no keyless
+equivalent, so those return 503 with a pointer to the self-hosted `/v1/yt/*` endpoints instead of a dead end.
 
     GET /v1/youtube/search?q=&type=video|channel|playlist&max=10&order=relevance&page_token=
     GET /v1/youtube/video?id=|url=
@@ -13,6 +16,7 @@ search costs 100 units, every other call here costs 1.
     GET /v1/youtube/comments?id=&max=20&order=relevance|time
     GET /v1/youtube/quota          units spent by this process today (resets at Pacific midnight)
 """
+import asyncio
 import os
 import re
 import time
@@ -42,6 +46,126 @@ def _keys() -> list[str]:
     if not out:
         raise HTTPException(503, "YOUTUBE_API_KEY is not set (Google Cloud Console > YouTube Data API v3 > Credentials)")
     return out
+
+
+def _has_key() -> bool:
+    """True when at least one YouTube API key is configured. Never raises."""
+    raw = os.getenv("YOUTUBE_API_KEYS", "") + "," + os.getenv("YOUTUBE_API_KEY", "")
+    return any(k.strip() for k in raw.split(","))
+
+
+def _keyless(what: str, alternative: str = "") -> HTTPException:
+    """503 for the endpoints that genuinely need the official API, so the error tells the caller what to do."""
+    msg = (f"{what} needs YOUTUBE_API_KEY (Google Cloud Console > YouTube Data API v3). "
+           "Search, video details and downloads work without any key.")
+    if alternative:
+        msg += f" Self-hosted equivalent: {alternative}."
+    return HTTPException(503, msg)
+
+
+KEYLESS_NOTE = ("No YOUTUBE_API_KEY set: this answer came from the keyless route (yt-dlp / the YouTube results "
+                "page / oEmbed). Counts can be missing and the result set is smaller than the official API's.")
+
+
+def _iso(day: str | None) -> str | None:
+    """yt-dlp upload_date is YYYYMMDD; the API shape here is ISO 8601."""
+    d = str(day or "")
+    return f"{d[0:4]}-{d[4:6]}-{d[6:8]}T00:00:00Z" if len(d) == 8 and d.isdigit() else None
+
+
+def _keyless_thumbs(vid: str, best: str | None = None) -> dict:
+    """Same keys the official API uses, so a client written for one shape works with both."""
+    base = f"https://i.ytimg.com/vi/{vid}"
+    out = {"default": f"{base}/default.jpg", "medium": f"{base}/mqdefault.jpg", "high": f"{base}/hqdefault.jpg"}
+    if best:
+        out["high"] = best
+        out["maxres"] = best
+    return out
+
+
+def _keyless_video_item(info: dict, vid: str, description: str | None = None) -> dict:
+    """Map a yt-dlp info dict onto the official `videos.list` item shape."""
+    thumbs = info.get("thumbnails") or []
+    best = (thumbs[-1] or {}).get("url") if thumbs else None
+    return {"id": vid, "type": "video", "title": info.get("title"),
+            "description": description if description is not None else (info.get("description") or "")[:1200],
+            "channel_id": info.get("channel_id"), "channel": info.get("channel") or info.get("uploader"),
+            "published_at": _iso(info.get("upload_date")),
+            "tags": (info.get("tags") or [])[:20],
+            "live": bool(info.get("is_live")) or None,
+            "duration_seconds": _seconds(info.get("duration")),
+            "views": info.get("view_count"), "likes": info.get("like_count"), "comments": info.get("comment_count"),
+            "thumbnails": _keyless_thumbs(vid, best), "url": f"https://www.youtube.com/watch?v={vid}",
+            "embed_url": f"https://www.youtube.com/embed/{vid}", "embeddable": info.get("playable_in_embed")}
+
+
+def _seconds(v) -> int | None:
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _keyless_video(vid: str) -> dict:
+    """Full-ish video details with no API key: yt-dlp first, oEmbed when the page is blocked."""
+    from . import ytfallback
+    from .media import _info
+    url = f"https://www.youtube.com/watch?v={vid}"
+    try:
+        info = await asyncio.wait_for(asyncio.to_thread(_info, url), timeout=45)
+        if info and info.get("title"):
+            return _keyless_video_item(info, vid)
+    except Exception:  # noqa: BLE001  -- blocked / private / timed out: fall back to oEmbed
+        pass
+    try:
+        meta = await ytfallback.oembed(url)
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001
+        meta = {"title": None, "uploader": None, "thumbnail": None}
+    return {"id": vid, "type": "video", "title": meta.get("title"), "description": None,
+            "channel_id": None, "channel": meta.get("uploader"), "published_at": None, "tags": [],
+            "live": None, "duration_seconds": None, "views": None, "likes": None, "comments": None,
+            "thumbnails": _keyless_thumbs(vid, meta.get("thumbnail")), "url": url,
+            "embed_url": f"https://www.youtube.com/embed/{vid}", "embeddable": None, "partial": True}
+
+
+async def _keyless_search(q: str, max: int) -> list[dict]:
+    """Search by parsing the YouTube results page, then fill in channel names via oEmbed (cheap, parallel)."""
+    from . import ytfallback
+    hits = await ytfallback.html_search(q, max)
+    items = []
+    for h in hits[:max]:
+        vid = ytfallback.video_id(h.get("url") or "")
+        if not vid:
+            continue
+        items.append({"id": vid, "type": "video", "title": h.get("title"), "description": None,
+                      "channel_id": None, "channel": None, "published_at": None,
+                      "duration": h.get("duration"), "duration_seconds": _clock(h.get("duration")),
+                      "views": h.get("views"), "thumbnails": _keyless_thumbs(vid, h.get("thumbnail")),
+                      "url": f"https://www.youtube.com/watch?v={vid}",
+                      "embed_url": f"https://www.youtube.com/embed/{vid}"})
+
+    async def fill(it: dict) -> None:
+        try:
+            meta = await ytfallback.oembed(it["url"])
+            it["channel"] = meta.get("uploader")
+        except Exception:  # noqa: BLE001  -- a name we cannot read is not worth failing the whole search
+            pass
+
+    await asyncio.gather(*(fill(it) for it in items[:10]))
+    return items
+
+
+def _clock(v) -> int | None:
+    """'4:13' / '1:02:03' -> seconds (the results page gives durations as text)."""
+    parts = str(v or "").strip().split(":")
+    if not all(p.isdigit() for p in parts) or not parts or parts == [""]:
+        return None
+    total = 0
+    for p in parts:
+        total = total * 60 + int(p)
+    return total or None
 
 
 def _pacific_day() -> str:
@@ -140,7 +264,16 @@ async def search(q: str = Query(..., min_length=1, max_length=200), type: str = 
                  max: int = Query(10, ge=1, le=50), order: str = Query("relevance", pattern="^(relevance|date|viewCount|rating|title)$"),
                  page_token: str | None = None, region: str | None = Query(None, min_length=2, max_length=2),
                  details: bool = False):
-    """Costs 100 quota units on a cache miss. details=true adds stats and duration for video results (+1 unit)."""
+    """Costs 100 quota units on a cache miss. details=true adds stats and duration for video results (+1 unit).
+
+    With no YOUTUBE_API_KEY this still works for type=video (keyless: YouTube results page + oEmbed),
+    so the endpoint never dead-ends on a missing key.
+    """
+    if not _has_key():
+        if type != "video":
+            raise _keyless(f"{type} search", "not available keyless; use /v1/yt/search for videos")
+        return {"success": True, "total": None, "next_page_token": None, "prev_page_token": None,
+                "source": "keyless", "note": KEYLESS_NOTE, "results": await _keyless_search(q, max)}
     d = await _call("search", {"part": "snippet", "q": q, "type": type, "maxResults": max, "order": order,
                                "pageToken": page_token, "regionCode": region}, cost=100)
     items = []
@@ -161,6 +294,9 @@ async def search(q: str = Query(..., min_length=1, max_length=200), type: str = 
 
 @router.get("/video")
 async def video(id: str | None = None, url: str | None = None):
+    if not _has_key():
+        v = await _keyless_video(_vid(id, url))
+        return {"success": True, "source": "keyless", "note": KEYLESS_NOTE, **v}
     v = await _videos([_vid(id, url)])
     if not v:
         raise HTTPException(404, "Video not found (private, deleted or wrong id)")
@@ -168,6 +304,8 @@ async def video(id: str | None = None, url: str | None = None):
 
 
 async def _channel(id: str | None, handle: str | None) -> dict:
+    if not _has_key():
+        raise _keyless("Channel data", "use /v1/yt/video?id= for one video, or /v1/yt/search")
     if not (id or handle):
         raise HTTPException(400, "Pass id= (UC...) or handle=@name")
     p = {"part": "snippet,statistics,contentDetails,brandingSettings"}
@@ -205,12 +343,16 @@ async def _playlist_videos(pid: str, max: int, page_token: str | None):
 async def channel_videos(id: str | None = None, handle: str | None = None, max: int = Query(20, ge=1, le=50),
                          page_token: str | None = None):
     """Latest uploads (1-2 units, far cheaper than search)."""
+    if not _has_key():
+        raise _keyless("A channel's uploads", "use /v1/yt/search?query=<channel name>")
     c = await _channel(id, handle)
     return await _playlist_videos(c["contentDetails"]["relatedPlaylists"]["uploads"], max, page_token)
 
 
 @router.get("/playlist")
 async def playlist(id: str, max: int = Query(50, ge=1, le=50), page_token: str | None = None):
+    if not _has_key():
+        raise _keyless("Playlist listing", "use /v1/yt/play?url=<video in the playlist>")
     if not re.fullmatch(r"[A-Za-z0-9_-]{10,60}", id):
         raise HTTPException(400, "Bad playlist id")
     return await _playlist_videos(id, max, page_token)
@@ -219,6 +361,8 @@ async def playlist(id: str, max: int = Query(50, ge=1, le=50), page_token: str |
 @router.get("/comments")
 async def comments(id: str | None = None, url: str | None = None, max: int = Query(20, ge=1, le=100),
                    order: str = Query("relevance", pattern="^(relevance|time)$"), page_token: str | None = None):
+    if not _has_key():
+        raise _keyless("Comments")
     d = await _call("commentThreads", {"part": "snippet", "videoId": _vid(id, url), "maxResults": max, "order": order,
                                        "pageToken": page_token, "textFormat": "plainText"})
     out = []
@@ -232,6 +376,11 @@ async def comments(id: str | None = None, url: str | None = None, max: int = Que
 @router.get("/quota")
 async def quota():
     """Units this process has spent today (Pacific time). Approximate: other apps using the same key are not counted."""
+    if not _has_key():
+        return {"success": True, "keys": 0, "units_spent_today": 0, "daily_limit_per_key": 10000,
+                "keys_out_of_quota": 0, "cache_minutes": TTL / 60, "source": "keyless",
+                "note": "No YOUTUBE_API_KEY set, so no official quota is being spent; /v1/youtube/search and "
+                        "/v1/youtube/video answer from the keyless route."}
     n = len(_keys())
     _count(0)
     return {"success": True, "keys": n, "units_spent_today": _spent["units"], "daily_limit_per_key": 10000,

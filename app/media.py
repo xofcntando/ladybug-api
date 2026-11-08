@@ -609,6 +609,21 @@ async def info(url: str):
     return {**_brief(i), "heights": heights, "is_live": i.get("is_live")}
 
 
+def _engines() -> dict:
+    """One line per download engine so the console can show what is available *right now*, without a key."""
+    from . import ytapi
+    return {"ytdlp": {"ready": True, "self_hosted": True, "note": "always on, no third-party key"},
+            "pot_provider": {"ready": bool(config.YT_POT_PROVIDER_URL), "self_hosted": True,
+                             "note": "bgutil PO tokens; started at boot when deno is present"},
+            "cobalt": {"ready": ytfallback.cobalt_enabled(), "self_hosted": True, "note": "set COBALT_API_URL"},
+            "vda": {"ready": ytfallback.vda_enabled(), "self_hosted": False, "paid": True,
+                    "note": "optional paid fallback, never required"},
+            "knight": {"ready": knight.BACKEND != "ytdlp" and bool(knight.KEY), "self_hosted": False,
+                       "note": "shared third-party key, last resort"},
+            "youtube_api": {"ready": ytapi._has_key(), "self_hosted": False,
+                            "note": "official YouTube Data API; keyless search/video work without it"}}
+
+
 @router.get("/status")
 async def status():
     """Setup check: are cookies / proxy / KnightBot configured and well-formed? Never reveals the values."""
@@ -637,6 +652,8 @@ async def status():
                     "hint": ("VDA_API_KEY is set but the service rejected every key \u2014 copy a fresh key from "
                              "https://video-download-api.com/dashboard") if ytfallback.vda_key_invalid else None},
             "backend_order": _backend_order("https://www.youtube.com/watch?v=x"),
+            "engines": _engines(),
+            "works_without_keys": True,
             "backend_failures": dict(_fails),
             "backend_last_error": dict(_last_error),
             "backend_down_for_s": {k: int(v - time.monotonic()) for k, v in _health.items() if v > time.monotonic()}}
@@ -785,7 +802,8 @@ async def probe(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
     if anon.get("consent_or_captcha_page") or anon.get("http") == 429:
         verdict = ("Google/YouTube is serving its 'unusual traffic' captcha page (HTTP 429) to this server's IP "
                    f"({ip}), with or without cookies. It is an IP-reputation block: cookies cannot fix it. "
-                   "Needs a residential YT_PROXY, or the VDA fallback with a positive balance.")
+                          "Fixes, cheap to expensive: a PO token (the built-in provider) or YT_COOKIES, then a residential "
+                   "YT_PROXY, and only then a paid VDA key with a positive balance.")
     elif anon.get("error") and g204.get("error"):
         verdict = "This server cannot reach YouTube at all (network/IP level)."
     elif authed and authed.get("logged_in") and authed.get("has_player_response") and authed.get("playability") == "OK":
