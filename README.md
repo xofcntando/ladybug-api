@@ -33,6 +33,10 @@ All under `/v1` need `X-API-Key`. Full interactive list at `/docs`.
 
 `GET /health` needs no key. Instead of the header you can pass `?apikey=KEY` (handy for bots, but keys in URLs show up in logs).
 
+### Stock video/images and official YouTube metadata
+`GET /v1/stock/search?q=ocean&kind=video|image`, `/v1/stock/info?id=`, `/v1/stock/download?id=video:12345&quality=medium` use the official Pixabay API (`PIXABAY_API_KEY`, free). Free for commercial use, results cached 24 h as Pixabay requires.
+`GET /v1/youtube/search|video|channel|channel/videos|playlist|comments|quota` use the official YouTube Data API v3 (`YOUTUBE_API_KEY`, or several in `YOUTUBE_API_KEYS`). Metadata only, cached `YT_API_CACHE_MINUTES` (60), search costs 100 of the 10,000 daily units, everything else 1.
+
 ### Quota: 3000 requests per day per key
 Each API key gets **3000 requests per rolling 24 hours** — that is our own limit, not a third-party one. Set `DAILY_REQUEST_LIMIT` to change it (`0` = unlimited) or `RATE_LIMIT_ENABLED=0` to turn it off. Every counted response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`; once a key is over, `/v1` returns `429` with `Retry-After`. `GET /v1/account/usage` always answers (it is never counted) and shows `limit`, `used`, `remaining` and `reset_in` for the calling key. Counters are in memory, so a restart or redeploy begins a fresh window.
 

@@ -31,6 +31,12 @@ services:
         value: "150"
       - key: MIN_FREE_MB          # if free disk drops below this, all downloads are deleted
         value: "100"
+      - key: PIXABAY_API_KEY     # free key from pixabay.com/api/docs - enables /v1/stock/* (stock video + images)
+        sync: false
+      - key: YOUTUBE_API_KEY     # Google Cloud Console > YouTube Data API v3 - enables /v1/youtube/* (metadata)
+        sync: false
+      - key: YOUTUBE_API_KEYS    # optional: several keys, comma separated, rotated when one runs out of quota
+        sync: false
       - key: MONGODB_URI         # optional: MongoDB connection string. Keeps the daily quota across redeploys, stores rotated YouTube cookies, caches lyrics
         sync: false
       - key: MONGODB_DB          # database name (default ladybug_api)
