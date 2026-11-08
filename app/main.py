@@ -28,6 +28,7 @@ from .anime_plus import router as anime_plus_router
 from .business import router as business_router
 from .music import router as music_router
 from .stock import router as stock_router
+from .musicinfo import router as musicinfo_router
 from .freemedia import router as freemedia_router
 from .ytapi import router as ytapi_router
 from .own import router as own_router
@@ -123,6 +124,7 @@ app.include_router(anime_plus_router, dependencies=auth)  # recommend, character
 app.include_router(business_router, dependencies=auth)  # invoices, VAT, pricing, finance and validation tools
 app.include_router(music_router, dependencies=auth)
 app.include_router(freemedia_router, dependencies=auth)  # NASA, Wikimedia Commons, Internet Archive video, Pexels
+app.include_router(musicinfo_router, dependencies=auth)  # Deezer + iTunes metadata
 app.include_router(stock_router, dependencies=auth)  # Pixabay stock video/image search + download
 app.include_router(ytapi_router, dependencies=auth)  # official YouTube Data API v3 (metadata, cached)
 app.include_router(own_router, dependencies=auth)  # self-hosted: lyrics, cards, fun, screenshot, removebg, tweet

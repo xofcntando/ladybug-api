@@ -40,6 +40,9 @@ All under `/v1` need `X-API-Key`. Full interactive list at `/docs`.
 ### Free media: NASA, Wikimedia Commons, Internet Archive video, Pexels
 `GET /v1/free/sources`, `/v1/free/search?q=moon&source=all|nasa|commons|archive|pexels&kind=video|image|audio&commercial_only=true`, `/v1/free/download?id=nasa:PIA12235&quality=small` (or `stream=true`). NASA, Commons and Archive need no key; Pexels turns on when `PEXELS_API_KEY` is set (free). Every result carries `license`, `commercial_use` and an `attribution` line. Downloads are capped at `MEDIA_MAX_MB` (default 50); big videos return 413, retry with `quality=small|tiny` or raise the cap.
 
+### Music metadata: Deezer + iTunes (no key)
+`GET /v1/music-info/search?q=&type=track|artist|album&source=all|deezer|itunes`, `/track?id=`, `/artist?id=`, `/artist/top`, `/artist/albums`, `/artist/similar` (Deezer), `/album?id=` (with track list), `/charts`. Ids look like `deezer:123` / `itunes:123`. Metadata, cover art, 30 s previews and links only, no downloads. Cached `MUSICINFO_CACHE_MINUTES` (60).
+
 ### Quota: 3000 requests per day per key
 Each API key gets **3000 requests per rolling 24 hours** — that is our own limit, not a third-party one. Set `DAILY_REQUEST_LIMIT` to change it (`0` = unlimited) or `RATE_LIMIT_ENABLED=0` to turn it off. Every counted response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`; once a key is over, `/v1` returns `429` with `Retry-After`. `GET /v1/account/usage` always answers (it is never counted) and shows `limit`, `used`, `remaining` and `reset_in` for the calling key. Counters are in memory, so a restart or redeploy begins a fresh window.
 
