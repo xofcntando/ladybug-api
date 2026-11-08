@@ -257,6 +257,16 @@ const R = {
               el('td', {}, f.height ? f.height + 'p' : (f.resolution || '-')),
               el('td', {}, f.abr || f.tbr || '-'), el('td', {}, f.filesize ? bytes(f.filesize) : '-'))))) : ''));
   },
+  proxies: d => el('div', { class: 'card' },
+    el('p', {}, d.configured ? `Egress IP pool: ${d.configured} configured, ${d.usable ?? 0} usable, ${d.blocked ?? 0} blocked by YouTube right now.` : (d.hint || 'No proxy configured.')),
+    (d.results || []).length ? el('table', {}, el('tr', {}, ['Proxy IP', 'State', 'HTTP', 'ms'].map(h => el('th', {}, h))),
+      d.results.map(r => el('tr', {}, el('td', { class: 'mono' }, r.proxy),
+        el('td', {}, el('span', { class: 'pill' + (r.ok ? '' : ' bad') }, r.ok ? 'usable' : r.blocked ? '429 blocked' : 'dead')),
+        el('td', {}, r.http ?? '-'), el('td', {}, r.ms ?? '-')))) : '',
+    d.pool ? el('div', { class: 'meta', style: 'margin-top:12px' },
+      `Healthy now: ${d.pool.healthy}/${d.pool.configured}` + (d.pool.provider_error ? ` · provider error: ${d.pool.provider_error}` : '')
+      + (d.pool.source_url_set ? ` · list from YT_PROXY_URL, refreshed every ${d.pool.refresh_minutes} min` : '')) : '',
+    el('div', { class: 'meta' }, 'A 429 benches that IP for YT_PROXY_COOLDOWN seconds and the next attempt rotates to another. Credentials are never shown.')),
   comments: d => el('div', {}, (d.comments || []).length ? d.comments.map(c => el('div', { class: 'card' },
     el('div', { class: 'meta' }, [c.author, c.likes != null ? c.likes + ' likes' : '', c.replies ? c.replies + ' replies' : ''].filter(Boolean).join('  ·  ')),
     el('div', { class: 'text' }, c.text || ''))) : el('div', { class: 'empty card' }, 'No comments.')),
@@ -293,6 +303,10 @@ const R = {
         el('td', {}, el('span', { class: 'pill' + (e.ready ? '' : ' bad') }, e.ready ? 'ready' : 'off')),
         el('td', { class: 'meta' }, (e.self_hosted ? 'self-hosted · ' : (e.paid ? 'paid, optional · ' : '')) + (e.note || ''))))),
     el('h4', {}, 'Backend order now'), el('div', { class: 'meta mono' }, (d.backend_order || []).join('  →  ')),
+    d.proxy_pool ? el('h4', {}, 'Egress IP pool') : '',
+    d.proxy_pool ? el('div', { class: 'meta' }, `${d.proxy_pool.healthy}/${d.proxy_pool.configured} healthy`
+      + (d.proxy_pool.source_url_set ? ` · rotating list from YT_PROXY_URL (every ${d.proxy_pool.refresh_minutes} min)` : '')
+      + (d.proxy_pool.configured ? '' : ' · none configured: downloads use the server IP, which is what YouTube 429s')) : '',
     d.backend_last_error && Object.keys(d.backend_last_error).length ? el('pre', { class: 'json' }, JSON.stringify(d.backend_last_error, null, 2)) : ''),
 };
 function copyBar(label, text) { return el('div', { class: 'bar' }, el('span', {}, label), el('button', { class: 'sm', onclick: e => { navigator.clipboard.writeText(text); e.target.textContent = 'Copied'; setTimeout(() => e.target.textContent = 'Copy', 1500); } }, 'Copy')); }
@@ -361,6 +375,8 @@ const TOOLS = [
   { g: 'YouTube', id: 'yt-api-video', name: 'Official API video', desc: 'Video metadata in the official videos.list shape. Keyless works too, with fewer fields.', fields: [T('id', 'Video id', { ph: 'dQw4w9WgXcQ' })], submit: 'Get video', run: get('/v1/youtube/video', 'ytvideo') },
   { g: 'YouTube', id: 'yt-comments', name: 'Comments', desc: 'Top comments for a video. Needs YOUTUBE_API_KEY.', fields: [T('id', 'Video id', { ph: 'dQw4w9WgXcQ' }), { k: 'max', label: 'How many', type: 'number', def: 20 }], submit: 'Get comments', run: get('/v1/youtube/comments', 'comments') },
   { g: 'YouTube', id: 'yt-quota', name: 'API quota', desc: 'Official API units spent today, or a note that the keyless route is in use.', fields: [], submit: 'Check quota', run: get('/v1/youtube/quota') },
+  { g: 'YouTube', id: 'yt-proxy', name: 'Egress IPs (proxy pool)', desc: 'Which egress IPs are usable right now and which YouTube has 429-blocked. Add YT_PROXY or YT_PROXY_URL to rotate IPs so one ban does not stop every download.',
+    fields: [], submit: 'Test IPs', run: get('/v1/media/proxy-test', 'proxies') },
   { g: 'YouTube', id: 'yt-engines', name: 'Download engines', desc: 'What is available right now: self-hosted yt-dlp, the PO-token provider, Cobalt, VDA, KnightBot and the official API. Shows the order the API will try.',
     fields: [], submit: 'Check engines', run: get('/v1/media/status', 'engines') },
 

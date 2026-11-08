@@ -61,6 +61,10 @@ services:
         sync: false
       - key: YT_PROXY            # optional: residential proxy URL(s) if YouTube blocks Render's IPs (comma separated = rotated)
         sync: false
+      - key: YT_PROXY_URL        # optional: provider endpoint returning a proxy list (rotating IPs, refreshed every YT_PROXY_REFRESH_MINUTES)
+        sync: false
+      - key: YT_PROXY_COOLDOWN   # optional: seconds a proxy that got a 429 is benched (default 300)
+        sync: false
       - key: YT_PO_TOKEN         # optional: manual PO token, e.g. web.gvs+TOKEN
         sync: false
       - key: YT_POT_PROVIDER_URL # optional: bgutil PO-token provider server URL

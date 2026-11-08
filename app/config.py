@@ -32,6 +32,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_AI_API_KEY
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 YT_PROXY = os.getenv("YT_PROXY", "")
+YT_PROXY_URL = os.getenv("YT_PROXY_URL", "")            # optional: provider endpoint returning fresh proxies (rotating IPs)
+YT_PROXY_REFRESH_MINUTES = float(os.getenv("YT_PROXY_REFRESH_MINUTES", "10"))  # how often that list is refreshed
+YT_PROXY_COOLDOWN = float(os.getenv("YT_PROXY_COOLDOWN", "300"))  # seconds a proxy that got a 429 is benched
 YT_429_RETRY = os.getenv("YT_429_RETRY", "1") != "0"   # after a full client chain of HTTP 429s, wait and try once more
 YT_429_BACKOFF = float(os.getenv("YT_429_BACKOFF", "6"))  # seconds parked before that second pass (0 disables the pause)
 YT_PO_TOKEN = os.getenv("YT_PO_TOKEN", "")  # optional: manual PO token(s), e.g. "web.gvs+TOKEN" (comma separated)
