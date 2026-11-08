@@ -408,13 +408,23 @@ def _reusable(key):
 # Without any of those, a datacenter IP is usually bot-checked, so the hosted backends go first. A backend that failed
 # recently is moved to the back for a few minutes so users do not wait on something that is known to be blocked.
 _health: dict[str, float] = {}  # backend -> monotonic time until which it is considered down
+_fails: dict[str, int] = {}  # backend -> consecutive failures (drives the back-off)
+BACKOFF_BASE = 300   # first failure: 5 minutes down
+BACKOFF_MAX = 1800   # a backend that keeps failing is skipped for at most 30 minutes between probes
+
+
+def _cooldown(backend: str) -> int:
+    n = _fails.get(backend, 1)
+    return min(BACKOFF_BASE * 2 ** max(n - 1, 0), BACKOFF_MAX)
 
 
 def _note(backend: str, ok: bool) -> None:
     if ok:
         _health.pop(backend, None)
+        _fails.pop(backend, None)
     else:
-        _health[backend] = time.monotonic() + 300
+        _fails[backend] = _fails.get(backend, 0) + 1
+        _health[backend] = time.monotonic() + _cooldown(backend)
 
 
 def _backend_order(url: str) -> list[str]:
@@ -471,7 +481,8 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
                     info, path, _ = await ytfallback.cobalt_fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
                 else:
                     info, path = await asyncio.wait_for(
-                        asyncio.to_thread(_download, url, kind, quality, kbps, attempts), timeout=240)
+                        asyncio.to_thread(_download, url, kind, quality, kbps,
+                                          1 if (_fails.get("ytdlp") and len(order) > 1) else attempts), timeout=240)
                 _note(backend, True)
             except HTTPException as e:
                 if e.status_code == 413:
@@ -581,6 +592,7 @@ async def status():
                     "hint": ("VDA_API_KEY is set but the service rejected every key \u2014 copy a fresh key from "
                              "https://video-download-api.com/dashboard") if ytfallback.vda_key_invalid else None},
             "backend_order": _backend_order("https://www.youtube.com/watch?v=x"),
+            "backend_failures": dict(_fails),
             "backend_down_for_s": {k: int(v - time.monotonic()) for k, v in _health.items() if v > time.monotonic()}}
 
 
