@@ -117,7 +117,7 @@ counts), and live TLS certificate details (issuer, validity, days left, SANs, TL
 
 ## What works without any keys
 Everything except text AI works out of the box. AI endpoints fall back automatically: text -> Pollinations (keyless, but only 1 request / 45 s per IP), images -> Pollinations Flux, speech -> Microsoft Edge neural voices (any voice name, e.g. `hu-HU-NoemiNeural`), moderation -> the text model.
-For fast AI add a free `GROQ_API_KEY` (fastest) or `GEMINI_API_KEY`. If several keys are set they are tried in order (Groq, Gemini, OpenAI, Anthropic) and a failing provider falls through to the next. `AI_PROVIDER` forces the first choice.
+Gemini walks a model list (`gemini-3.8-flash`, `3.1-flash-lite`, `flash-latest`, `3.5-flash`, `2.5-flash`), skipping models Google retired for new keys and backing off 5 minutes from busy ones; `GOOGLE_AI_API_KEY` works as an alias for `GEMINI_API_KEY`. For fast AI add a free `GROQ_API_KEY` (fastest) or `GEMINI_API_KEY`. If several keys are set they are tried in order (Groq, Gemini, OpenAI, Anthropic) and a failing provider falls through to the next. `AI_PROVIDER` forces the first choice.
 
 ## Performance and reliability
 - **Speed:** shared HTTP pool with connect retries, async DNS (cached), bounded LRU caches (`app/cache.py`) instead of "clear everything when full", identical concurrent requests share one upstream call (page fetches, video info), gzip for JSON/text, O(1) per-request rate limiting, CPU work in threads, lxml parsing, and a self-ping so the free Render instance does not fall asleep (`SELF_PING=0` to disable).
