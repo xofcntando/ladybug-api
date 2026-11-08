@@ -218,11 +218,14 @@ const R = {
       const dl = el('button', { class: 'sm' }, 'Download MP3');
       if (id) dl.addEventListener('click', () => grab('/v1/media/ytmp3?' + qs({ url: 'https://www.youtube.com/watch?v=' + id }), dl, 'Saved MP3'));
       else dl.disabled = true;
+      const fast = el('button', { class: 'sm' }, 'Fast (m4a)');
+      if (id) fast.addEventListener('click', () => grab('/v1/media/ytmp3?' + qs({ url: 'https://www.youtube.com/watch?v=' + id, audio_format: 'm4a' }), fast, 'Saved m4a'));
+      else fast.disabled = true;
       return el('div', { class: 'card media' }, th ? el('img', { src: th, alt: '', loading: 'lazy' }) : el('div'),
         el('div', {}, el('h2', {}, el('a', { href: m.url || ('https://www.youtube.com/watch?v=' + id), target: '_blank', rel: 'noopener' }, m.title || id || 'Untitled')),
           el('div', { class: 'meta' }, [m.channel, dur, m.views != null ? Number(m.views).toLocaleString() + ' views' : '', m.live ? 'live' : ''].filter(Boolean).join('  ·  ')),
           m.description ? el('p', {}, String(m.description).slice(0, 220)) : '',
-          el('div', { class: 'actions', style: 'margin-top:10px' }, dl,
+          el('div', { class: 'actions', style: 'margin-top:10px' }, dl, fast,
             el('button', { class: 'sm', onclick: () => open('yt-video', { url: 'https://www.youtube.com/watch?v=' + id }) }, 'Details'))));
     };
     return el('div', {}, d.source === 'keyless' ? el('div', { class: 'card', style: 'border-color:var(--warn)' }, el('b', {}, 'Keyless route'), ' ', d.note || '') : '',
@@ -234,9 +237,9 @@ const R = {
       d.view_count != null ? Number(d.view_count).toLocaleString() + ' views' : '', d.like_count != null ? Number(d.like_count).toLocaleString() + ' likes' : '',
       d.upload_date].filter(Boolean).join('  ·  ');
     const heads = el('div', { class: 'actions', style: 'margin:10px 0' });
-    [['audio', 'MP3'], ['video', 'MP4 360p']].forEach(([type, label]) => {
+    [['audio', 'MP3'], ['audio', 'M4A (fast)'], ['video', 'MP4 360p']].forEach(([type, label]) => {
       const b = el('button', { class: 'sm' }, 'Download ' + label);
-      b.addEventListener('click', () => grab('/v1/media/download?' + qs({ url: d.url || ('https://www.youtube.com/watch?v=' + d.id), type, quality: 360 }), b, 'Saved ' + label));
+      b.addEventListener('click', () => grab('/v1/media/download?' + qs({ url: d.url || ('https://www.youtube.com/watch?v=' + d.id), type, quality: 360, audio_format: label.includes('M4A') ? 'm4a' : 'mp3' }), b, 'Saved ' + label));
       heads.append(b);
     });
     if (d.url) heads.append(el('a', { class: 'sm', href: d.url, target: '_blank', rel: 'noopener' }, 'Open on YouTube'));
@@ -322,8 +325,10 @@ const CARD = kind => ({ g: 'Cards', id: kind, name: kind === 'welcome' ? 'Welcom
 
 const TOOLS = [
   { g: 'Media', id: 'dl', name: 'Download audio or video', desc: 'Paste a YouTube, TikTok, Instagram, Facebook, X, SoundCloud or Vimeo link. Get an MP3 or MP4 you can play and save.',
-    fields: [T('url', 'Link', { ph: 'https://www.youtube.com/watch?v=…' }), S('type', 'Format', [['audio', 'MP3 audio'], ['video', 'MP4 video']]), S('quality', 'Video quality', Q, { def: '720', show: v => v.type === 'video' })], submit: 'Download',
-    run: async v => ({ kind: 'media', data: await api('/v1/media/download?' + qs({ url: v.url, type: v.type, quality: v.quality })) }) },
+    fields: [T('url', 'Link', { ph: 'https://www.youtube.com/watch?v=…' }), S('type', 'Format', [['audio', 'Audio'], ['video', 'MP4 video']]),
+      S('audio_format', 'Audio file', [['mp3', 'MP3 · plays everywhere'], ['m4a', 'M4A · no re-encode, ~2x faster']], { show: v => v.type === 'audio' }),
+      S('quality', 'Video quality', Q, { def: '720', show: v => v.type === 'video' })], submit: 'Download',
+    run: async v => ({ kind: 'media', data: await api('/v1/media/download?' + qs({ url: v.url, type: v.type, quality: v.quality, audio_format: v.audio_format })) }) },
   { g: 'Media', id: 'info', name: 'Video info', desc: 'Title, length, thumbnail and available qualities without downloading.', fields: [T('url', 'Link')], submit: 'Get info', run: get('/v1/media/info', 'info') },
 
 
@@ -344,8 +349,10 @@ const TOOLS = [
   { g: 'YouTube', id: 'yt-search', name: 'Search YouTube', desc: 'Search by name. Runs on the self-hosted engine, so it works without a VDA key or a Google API key.',
     fields: [T('query', 'Search', { def: 'lofi hip hop', ph: 'lofi hip hop' }), { k: 'limit', label: 'Results', type: 'number', def: 5 }], submit: 'Search', run: get('/v1/yt/search', 'ytsearch') },
   { g: 'YouTube', id: 'yt-play', name: 'Download by name', desc: 'Search and download the first match as a small MP3 or MP4. If a result is blocked or removed, the next one is tried automatically.',
-    fields: [T('query', 'Search', { ph: 'song name or artist' }), S('type', 'Format', [['audio', 'MP3 audio'], ['video', 'MP4 video']]), S('quality', 'Video quality', Q, { def: '360', show: v => v.type === 'video' }), { k: 'index', label: 'Which result', type: 'number', def: 1 }],
-    submit: 'Download', run: async v => ({ kind: 'media', data: await api('/v1/yt/play?' + qs({ query: v.query, type: v.type, quality: v.quality, index: v.index })) }) },
+    fields: [T('query', 'Search', { ph: 'song name or artist' }), S('type', 'Format', [['audio', 'Audio'], ['video', 'MP4 video']]),
+      S('audio_format', 'Audio file', [['mp3', 'MP3 · plays everywhere'], ['m4a', 'M4A · no re-encode, ~2x faster']], { show: v => v.type === 'audio' }),
+      S('quality', 'Video quality', Q, { def: '360', show: v => v.type === 'video' }), { k: 'index', label: 'Which result', type: 'number', def: 1 }],
+    submit: 'Download', run: async v => ({ kind: 'media', data: await api('/v1/yt/play?' + qs({ query: v.query, type: v.type, quality: v.quality, index: v.index, audio_format: v.audio_format })) }) },
   { g: 'YouTube', id: 'yt-video', name: 'Video details', desc: 'Title, channel, stats, chapters and every format, with MP3 / MP4 download buttons.',
     fields: [T('url', 'Link or 11-character id', { ph: 'https://www.youtube.com/watch?v=…' })], submit: 'Get details', run: get('/v1/yt/video', 'ytvideo') },
   { g: 'YouTube', id: 'yt-formats', name: 'Available formats', desc: 'Every audio and video stream for a video, plus the best pick of each.', fields: [T('id', 'Video id', { ph: 'dQw4w9WgXcQ' })], submit: 'List formats', run: get('/v1/yt/formats', 'ytvideo') },
