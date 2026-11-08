@@ -57,20 +57,54 @@ async def _openai(prompt, system, mt, temp):
                                _model("openai", "gpt-4o-mini"), prompt, system, mt, temp)
 
 
+# Google retires models for new keys without notice ("no longer available to new users"), and busy ones answer 429/503.
+# So Gemini walks a list: the model from AI_MODEL (when Gemini is the intended provider) first, then current ones, then
+# older ones for keys that still have them. A model that was refused is remembered for an hour and skipped.
+GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash"]
+_gemini_skip: dict[str, float] = {}
+
+
+def _gemini_candidates() -> list[str]:
+    import time
+    now = time.monotonic()
+    first = _model("gemini", "")
+    models = ([first] if first else []) + [m for m in GEMINI_MODELS if m != first]
+    live = [m for m in models if _gemini_skip.get(m, 0) <= now]
+    return live or models
+
+
 async def _gemini(prompt, system, mt, temp):
-    model = _model("gemini", "gemini-2.5-flash")
-    gen = {"maxOutputTokens": mt, "temperature": temp}
-    if "2.5" in model and "pro" not in model:
-        gen["thinkingConfig"] = {"thinkingBudget": 0}  # otherwise "thinking" eats the token budget and the reply is empty
-    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": gen}
-    if system:
-        body["systemInstruction"] = {"parts": [{"text": system}]}
-    r = await client().post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                            headers={"x-goog-api-key": config.GEMINI_API_KEY}, json=body, timeout=60)
-    if r.status_code >= 400:
-        raise _err("gemini", r)
-    parts = (r.json().get("candidates") or [{}])[0].get("content", {}).get("parts", [])
-    return {"text": "".join(p.get("text", "") for p in parts).strip(), "model": model, "provider": "gemini"}
+    import time
+    last: HTTPException | None = None
+    for model in _gemini_candidates():
+        gen = {"maxOutputTokens": mt, "temperature": temp}
+        if "2.5" in model and "pro" not in model:
+            gen["thinkingConfig"] = {"thinkingBudget": 0}  # otherwise "thinking" eats the token budget and the reply is empty
+        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": gen}
+        if system:
+            body["systemInstruction"] = {"parts": [{"text": system}]}
+        try:
+            r = await client().post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                                    headers={"x-goog-api-key": config.GEMINI_API_KEY}, json=body, timeout=15)
+        except httpx.HTTPError as e:  # a stuck model must not eat the whole request: try the next one
+            last = HTTPException(504, f"gemini {model} unreachable ({type(e).__name__})")
+            _gemini_skip[model] = time.monotonic() + 300  # overloaded: leave it alone for 5 minutes
+            continue
+        if r.status_code >= 400:
+            last = _err("gemini", r)
+            if r.status_code == 404 or "no longer available" in r.text:
+                _gemini_skip[model] = time.monotonic() + 3600
+            if r.status_code in (429, 500, 503):
+                _gemini_skip[model] = time.monotonic() + 300
+            if r.status_code in (400, 401, 403) and "no longer available" not in r.text:
+                raise last  # bad key / bad request: another model will not help
+            continue  # 404 retired, 429 / 503 busy: next model
+        parts = (r.json().get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+        text = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
+        if text:
+            return {"text": text, "model": model, "provider": "gemini"}
+        last = HTTPException(502, f"gemini {model} returned an empty reply")
+    raise last or HTTPException(502, "No Gemini model answered")
 
 
 async def _anthropic(prompt, system, mt, temp):

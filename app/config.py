@@ -28,7 +28,7 @@ YT_COOKIES = os.getenv("YT_COOKIES", "")  # optional: Netscape-format cookies te
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "gpt-image-1")
 TTS_MODEL = os.getenv("TTS_MODEL", "tts-1")
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_AI_API_KEY", "")  # either name works
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 YT_PROXY = os.getenv("YT_PROXY", "")  # optional: http(s)/socks5 proxy URL(s), comma separated = rotated, e.g. residential proxies
