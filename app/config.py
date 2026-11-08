@@ -31,7 +31,9 @@ TTS_MODEL = os.getenv("TTS_MODEL", "tts-1")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_AI_API_KEY", "")  # either name works
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
-YT_PROXY = os.getenv("YT_PROXY", "")  # optional: http(s)/socks5 proxy URL(s), comma separated = rotated, e.g. residential proxies
+YT_PROXY = os.getenv("YT_PROXY", "")
+YT_429_RETRY = os.getenv("YT_429_RETRY", "1") != "0"   # after a full client chain of HTTP 429s, wait and try once more
+YT_429_BACKOFF = float(os.getenv("YT_429_BACKOFF", "6"))  # seconds parked before that second pass (0 disables the pause)
 YT_PO_TOKEN = os.getenv("YT_PO_TOKEN", "")  # optional: manual PO token(s), e.g. "web.gvs+TOKEN" (comma separated)
 YT_POT_PROVIDER_URL = os.getenv("YT_POT_PROVIDER_URL", "")  # optional: bgutil PO-token provider server, e.g. http://host:4416
 
