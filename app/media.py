@@ -368,21 +368,34 @@ def _info(url: str) -> dict:
     return _with_clients(go, url=url)
 
 
+AUDIO_CONTAINERS = ("mp3", "m4a")
+
+
+def _audio_extra(kbps: int, container: str = "mp3") -> dict:
+    """Format+postprocessor for the audio path.
+
+    `m4a` downloads the AAC stream YouTube already serves (itag 140) and hands it back untouched: no
+    ffmpeg step at all, which is the expensive part on a small CPU. `mp3` is the compatible default and
+    still re-encodes, so it costs download + a full AAC->MP3 transcode.
+    """
+    if container == "m4a":
+        return {"format": "bestaudio[ext=m4a]/bestaudio[acodec=aac]/bestaudio"}
+    k = max(32, int(kbps))
+    return {"format": f"bestaudio[abr<={k}]/bestaudio[abr<={k + 32}]/bestaudio/best",
+            "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": str(k)}]}
+
+
 def _download(url: str, kind: str, quality: int, kbps: int | None = None,
-              attempts: int | None = None) -> tuple[dict, Path]:
-    return _with_clients(lambda extra, proxy: _download_once(url, kind, quality, extra, proxy, kbps), attempts, url)
+              attempts: int | None = None, container: str = "mp3") -> tuple[dict, Path]:
+    return _with_clients(lambda extra, proxy: _download_once(url, kind, quality, extra, proxy, kbps, container), attempts, url)
 
 
 def _download_once(url: str, kind: str, quality: int, client_opts: dict, proxy: str | None = None,
-                   kbps: int | None = None) -> tuple[dict, Path]:
+                   kbps: int | None = None, container: str = "mp3") -> tuple[dict, Path]:
     d = Path(tempfile.mkdtemp(prefix="lb_"))
     if kind == "audio":
-        # Small by default: prefer an audio stream at or under AUDIO_KBPS so we download less,
-        # and encode at that bitrate instead of a fat 192 kbps file.
-        k = kbps or config.AUDIO_KBPS
-        extra = {"format": f"bestaudio[abr<={k}]/bestaudio[abr<={k + 32}]/bestaudio/best",
-                 "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3",
-                                     "preferredquality": str(k)}]}
+        # Small by default: prefer an audio stream at or under AUDIO_KBPS so we download less.
+        extra = _audio_extra(kbps or config.AUDIO_KBPS, container)
     else:
         h = quality
         cap = config.VIDEO_MAX_MB
@@ -400,8 +413,14 @@ def _download_once(url: str, kind: str, quality: int, client_opts: dict, proxy: 
     try:
         with yt_dlp.YoutubeDL(_opts(d, extra, proxy)) as y:
             info = y.extract_info(url, download=True)
-        ext = "mp3" if kind == "audio" else "mp4"
-        files = sorted(d.glob(f"*.{ext}")) or [f for f in d.iterdir() if f.suffix not in (".txt", ".part")]
+        if kind == "audio" and container == "m4a":
+            # no transcode: keep whatever container YouTube served (usually .m4a, sometimes .webm)
+            files = sorted((f for f in d.iterdir() if f.suffix.lower() in (".m4a", ".webm", ".opus", ".mp3", ".aac")),
+                           key=lambda f: f.stat().st_size, reverse=True)
+            ext = files[0].suffix.lstrip(".").lower() if files else ""
+        else:
+            ext = "mp3" if kind == "audio" else "mp4"
+            files = sorted(d.glob(f"*.{ext}")) or [f for f in d.iterdir() if f.suffix not in (".txt", ".part")]
         if not files:
             raise HTTPException(413, f"Video too long (>{config.MEDIA_MAX_MINUTES} min) or too large (>{config.VIDEO_MAX_MB if kind == 'video' else config.MEDIA_MAX_MB} MB)")
     except BaseException:
@@ -413,7 +432,7 @@ def _download_once(url: str, kind: str, quality: int, client_opts: dict, proxy: 
         shutil.rmtree(d, ignore_errors=True)
         lower = [x for x in (720, 480, 360, 240, 144) if x < quality]
         if lower:
-            return _download_once(url, kind, lower[0], client_opts, proxy, kbps)
+            return _download_once(url, kind, lower[0], client_opts, proxy, kbps, container)
         raise HTTPException(413, f"Video is larger than {config.VIDEO_MAX_MB} MB even at 144p")
     return info, files[0]
 
@@ -485,10 +504,10 @@ def _backend_order(url: str) -> list[str]:
 
 
 async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None = None,
-               attempts: int | None = None):
+               attempts: int | None = None, container: str = "mp3"):
     await _check_url(url)
     url = knight.canonical(url)
-    key = (url, kind, quality if kind == "video" else 0, kbps if kind == "audio" else 0)
+    key = (url, kind, quality if kind == "video" else 0, kbps if kind == "audio" else 0, container if kind == "audio" else "")
     def _served(hit):
         info, f = hit
         if stream:
@@ -522,7 +541,7 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
                 else:
                     info, path = await asyncio.wait_for(
                         asyncio.to_thread(_download, url, kind, quality, kbps,
-                                          1 if (_fails.get("ytdlp") and len(order) > 1) else attempts), timeout=240)
+                                          1 if (_fails.get("ytdlp") and len(order) > 1) else attempts, container), timeout=240)
                 _note(backend, True)
                 served = backend
             except HTTPException as e:
@@ -556,7 +575,8 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
             raise HTTPException(502, f"Download failed on every method tried ({tried}): {' | '.join(x[:220] for x in errors)}")
     ext = path.suffix.lstrip(".")
     name = re.sub(r'[\\/:*?"<>|]+', "", info.get("title") or "media")[:80].strip() or "media"
-    ctype = "audio/mpeg" if kind == "audio" else "video/mp4"
+    ctype = ("audio/mp4" if ext in ("m4a", "mp4", "aac") else "audio/webm" if ext in ("webm", "opus", "ogg", "oga")
+             else "audio/mpeg") if kind == "audio" else "video/mp4"
     work_dir = path.parent
     if stream:
         return FileResponse(path, media_type=ctype, filename=f"{name}.{ext}", headers={"X-Served-By": served or ""},
@@ -566,8 +586,11 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
     if len(_reuse) > 200:
         _reuse.clear()
     _reuse[key] = (info, f)
-    return {"success": True, "type": kind, **_brief(info), "file": f, "expires_in_minutes": config.MEDIA_TTL_MINUTES,
-            "served_by": served}
+    out = {"success": True, "type": kind, **_brief(info), "file": f, "expires_in_minutes": config.MEDIA_TTL_MINUTES,
+           "served_by": served}
+    if kind == "audio":
+        out["audio_format"] = container
+    return out
 
 
 _info_cache = TTLCache(maxsize=100, ttl=600)
@@ -662,9 +685,12 @@ async def status():
 @router.get("/ytmp3")
 async def ytmp3(url: str, kbps: int = Query(config.AUDIO_KBPS, ge=32, le=320,
                                            description="MP3 bitrate. Lower = smaller and faster."),
+                audio_format: str = Query("mp3", pattern="^(mp3|m4a)$",
+                                          description="m4a skips the ffmpeg re-encode and returns YouTube's own AAC "
+                                                      "stream: several times faster, same audio."),
                 stream: bool = False):
-    """Audio as a small MP3 (128 kbps by default). stream=true returns the file directly."""
-    return await _run(url, "audio", 0, stream, kbps)
+    """Audio as a small MP3 (128 kbps by default). audio_format=m4a skips the transcode. stream=true returns the file."""
+    return await _run(url, "audio", 0, stream, kbps, None, audio_format)
 
 
 @router.get("/ytmp4")
@@ -676,9 +702,12 @@ async def ytmp4(url: str, quality: int = Query(config.VIDEO_QUALITY_DEFAULT, ge=
 @router.get("/download")
 async def download(url: str, type: str = Query("video", pattern="^(audio|video)$"),
                    quality: int = Query(config.VIDEO_QUALITY_DEFAULT, ge=144, le=1080),
-                   kbps: int = Query(config.AUDIO_KBPS, ge=32, le=320), stream: bool = False):
+                   kbps: int = Query(config.AUDIO_KBPS, ge=32, le=320),
+                   audio_format: str = Query("mp3", pattern="^(mp3|m4a)$",
+                                             description="m4a skips the ffmpeg re-encode (much faster on a small CPU)"),
+                   stream: bool = False):
     """Any supported site (YouTube, TikTok, Instagram, Facebook, X, SoundCloud, Vimeo, Reddit...)."""
-    return await _run(url, type, quality, stream, kbps)
+    return await _run(url, type, quality, stream, kbps, None, audio_format)
 
 
 @router.get("/diagnose")

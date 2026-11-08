@@ -179,6 +179,8 @@ async def play(query: str = Query(..., min_length=2, max_length=150),
                attempts: int = Query(2, ge=1, le=6,
                                      description="Player-client attempts per result before moving on. "
                                                  "Lower = faster failover between results."),
+               audio_format: str = Query("mp3", pattern="^(mp3|m4a)$",
+                                         description="m4a skips the ffmpeg re-encode: much faster, same audio"),
                stream: bool = False):
     """Search YouTube by name and download the first (or Nth) match as a small MP3 or MP4.
 
@@ -198,7 +200,7 @@ async def play(query: str = Query(..., min_length=2, max_length=150),
         if not is_youtube(url):
             continue
         try:
-            return await _run(url, type, quality, stream, kbps, attempts)
+            return await _run(url, type, quality, stream, kbps, attempts, audio_format)
         except HTTPException as e:
             if e.status_code in (400, 403, 413):  # unsupported / private / too long: no point retrying
                 raise
