@@ -255,9 +255,29 @@ def _age_gated(url: str) -> bool:
     return bool(m and re.search(r"\bage\b|inappropriate", m[1], re.I))
 
 
+IP_BLOCK_MARKERS = ("429", "unusual traffic", "too many requests", "captcha", "/sorry/", "confirm you're not a bot",
+                    "confirm you are not a bot", "sign in to confirm you’re not a bot", "bot check")
+
+
+def _is_ip_block(e: Exception | str) -> bool:
+    """True when YouTube refused the *request itself* (429 / 'unusual traffic' captcha page).
+
+    This is an IP-reputation verdict, not a cookie or video problem: the same page comes back with a fresh
+    cookie jar. Retrying the client chain is pointless, a different egress IP is the only fix.
+    """
+    low = str(e).lower()
+    return any(m in low for m in IP_BLOCK_MARKERS)
+
+
 def _err(e: Exception, url: str | None = None) -> HTTPException:
     msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e))
     low = msg.lower()
+    if _is_ip_block(msg):
+        return HTTPException(503, "YouTube is serving this server's IP its 'unusual traffic' page (HTTP 429 / captcha). "
+                                  "That is IP reputation, so cookies and extra client retries cannot fix it: the "
+                                  "downloads work only in the gaps between blocks. Fix it with YT_PROXY (a residential "
+                                  "or mobile proxy, comma separated to rotate), or keep VDA_API_KEY as the paid "
+                                  "fallback. /v1/media/probe shows the verdict for the current egress IP.")
     if "sign in to confirm" in low or "not a bot" in low or "confirm you" in low:
         # Same wording for "your IP is throttled" and "this video needs an account": probe to tell them apart.
         status = _playability(url) if url else None
@@ -319,23 +339,34 @@ def _with_clients(fn, attempts: int | None = None, url: str | None = None):
     age-restricted / login-gated, no other client can succeed and we stop instead of burning
     the remaining attempts (that turned a 4s failure into a 24s one).
     """
-    last = None
     ps = _proxies()
     chain = CLIENT_CHAIN[:attempts] if attempts else CLIENT_CHAIN
-    for n, clients in enumerate(chain):
-        extra = _chain_extra(clients)
-        proxy = ps[n % len(ps)] if ps else None
-        try:
-            return fn(extra, proxy)
-        except Exception as e:  # noqa: BLE001
-            last = e
-            if not _is_block(e):
-                raise
-            low = str(e).lower()
-            if url and n == 0 and ("sign in to confirm" in low or "not a bot" in low):
-                if _age_gated(url):
-                    raise  # permanent: needs cookies, not another client
-            time.sleep(min(1.5 * n, 4))  # small, growing pause: hammering YouTube makes the block stick
+    last = None
+    blocks = 0
+    # YouTube's 429 windows are short (seconds), so after the chain is exhausted on pure IP blocks one
+    # parked retry of the cheap cookieless clients converts a fair share of them into a success.
+    rounds = 2 if config.YT_429_RETRY else 1
+    for rnd in range(rounds):
+        for n, clients in enumerate(chain):
+            extra = _chain_extra(clients)
+            proxy = ps[n % len(ps)] if ps else None
+            try:
+                return fn(extra, proxy)
+            except Exception as e:  # noqa: BLE001
+                last = e
+                if not _is_block(e):
+                    raise
+                low = str(e).lower()
+                if url and n == 0 and ("sign in to confirm" in low or "not a bot" in low):
+                    if _age_gated(url):
+                        raise  # permanent: needs cookies, not another client
+                if _is_ip_block(e):
+                    blocks += 1
+                time.sleep(min(1.5 * n, 4))  # small, growing pause: hammering YouTube makes the block stick
+        if blocks < len(chain) or rnd + 1 >= rounds:
+            break
+        time.sleep(config.YT_429_BACKOFF)  # every attempt was an IP block: wait out the window, then once more
+        blocks = 0
     raise last
 
 
@@ -736,8 +767,9 @@ async def diagnose(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ", dow
         except Exception:  # noqa: BLE001
             return None
 
+    out: list[dict] = []
+
     def run():
-        out = []
         ps = _proxies()
         for n, clients in enumerate(CLIENT_CHAIN):
             extra = _chain_extra(clients)
@@ -763,8 +795,13 @@ async def diagnose(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ", dow
                             "seconds": round(time.monotonic() - t0, 1)})
         return out
 
-    attempts = await asyncio.wait_for(asyncio.to_thread(run), timeout=170 if not download else 280)
-    return {"url": url, "cookies_loaded": bool(_cookies_text()), "proxy_set": bool(_proxies()),
+    timed_out = False
+    try:
+        await asyncio.wait_for(asyncio.to_thread(run), timeout=170 if not download else 280)
+    except (asyncio.TimeoutError, TimeoutError):
+        timed_out = True  # keep whatever was collected: a partial answer beats a bare 5xx
+    attempts = out
+    return {"url": url, "timed_out": timed_out, "cookies_loaded": bool(_cookies_text()), "proxy_set": bool(_proxies()),
             "pot_provider": await asyncio.to_thread(probe_provider), "pot_autostart": __import__("app.potserver", fromlist=["state"]).state, "pot_log_tail": pot_log(),
             "playability": await asyncio.to_thread(_playability, url), "attempts": attempts}
 
