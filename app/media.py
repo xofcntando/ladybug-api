@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from . import config, db, knight, ytfallback, ytdlp_update
+from . import config, proxies, db, knight, ytfallback, ytdlp_update
 from .cache import TTLCache, singleflight
 from .security import assert_public_url
 from .storage import meta_path, save_path
@@ -144,19 +144,12 @@ def _parse_cookies(raw: str) -> str:
 
 
 def _proxies() -> list[str]:
-    """YT_PROXY may hold several proxies separated by commas / spaces; they are rotated per attempt."""
-    return [p.strip() for p in re.split(r"[,\s]+", config.YT_PROXY or "") if p.strip()]
-
-
-_rr = {"i": 0}
+    """Egress IP pool: YT_PROXY plus an optional provider list from YT_PROXY_URL (see app/proxies.py)."""
+    return proxies.all_proxies()
 
 
 def _next_proxy() -> str | None:
-    ps = _proxies()
-    if not ps:
-        return None
-    _rr["i"] = (_rr["i"] + 1) % len(ps)
-    return ps[_rr["i"]]
+    return proxies.pick()
 
 
 def _yt_args(clients=None) -> dict:
@@ -188,7 +181,7 @@ def _opts(tmp: Path, extra: dict, proxy: str | None = None) -> dict:
          "http_headers": {"Accept-Language": "en-US,en;q=0.9"}}
     if _JS:
         o["js_runtimes"] = _JS
-    px = proxy if proxy is not None else (_proxies()[0] if _proxies() else None)
+    px = proxy if proxy is not None else proxies.pick()
     if px:
         o["proxy"] = px
     ck = "" if extra.get("_nocookies") else _cookies_text()
@@ -339,21 +332,29 @@ def _with_clients(fn, attempts: int | None = None, url: str | None = None):
     age-restricted / login-gated, no other client can succeed and we stop instead of burning
     the remaining attempts (that turned a 4s failure into a 24s one).
     """
-    ps = _proxies()
     chain = CLIENT_CHAIN[:attempts] if attempts else CLIENT_CHAIN
     last = None
     blocks = 0
+    tried: set[str] = set()
     # YouTube's 429 windows are short (seconds), so after the chain is exhausted on pure IP blocks one
     # parked retry of the cheap cookieless clients converts a fair share of them into a success.
     rounds = 2 if config.YT_429_RETRY else 1
     for rnd in range(rounds):
         for n, clients in enumerate(chain):
             extra = _chain_extra(clients)
-            proxy = ps[n % len(ps)] if ps else None
+            proxy = proxies.pick(avoid=tried)  # a new IP per attempt: the block follows the IP, not the client
+            if proxy:
+                tried.add(proxy)
             try:
-                return fn(extra, proxy)
+                result = fn(extra, proxy)
+                proxies.note_ok(proxy)
+                return result
             except Exception as e:  # noqa: BLE001
                 last = e
+                if _is_ip_block(e):
+                    proxies.note_block(proxy, "429/captcha")  # bench this IP, the next attempt rotates
+                elif _is_block(e):
+                    proxies.note_fail(proxy)
                 if not _is_block(e):
                     raise
                 low = str(e).lower()
@@ -696,7 +697,7 @@ async def status():
                                                            "custom_key": knight.KEY != "knight", "last_error": knight.last_error,
                                                            "budget": knight.budget()},
             "js_runtime": list(_JS), "yt_dlp_version": ytdlp_update.version(),
-            "proxies": len(_proxies()), "po_token_set": bool(config.YT_PO_TOKEN), "pot_provider_set": bool(config.YT_POT_PROVIDER_URL),
+            "proxies": len(_proxies()), "proxy_pool": proxies.status(), "po_token_set": bool(config.YT_PO_TOKEN), "pot_provider_set": bool(config.YT_POT_PROVIDER_URL),
             "pot_autostart": __import__("app.potserver", fromlist=["state"]).state,
             "cobalt_set": ytfallback.cobalt_enabled(),
             "vda_set": ytfallback.vda_enabled(),
@@ -770,28 +771,32 @@ async def diagnose(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ", dow
     out: list[dict] = []
 
     def run():
-        ps = _proxies()
+        tried: set[str] = set()
         for n, clients in enumerate(CLIENT_CHAIN):
             extra = _chain_extra(clients)
             t0 = time.monotonic()
             label = clients if not isinstance(clients, tuple) else "nocookies:" + str(clients[1] or "default")
+            px = proxies.pick(avoid=tried)
+            if px:
+                tried.add(px)
+            via = proxies.label(px) if px else "direct"
             try:
                 if download:
-                    _, fp = _download_once(url, download, 360, extra, ps[n % len(ps)] if ps else None)
+                    _, fp = _download_once(url, download, 360, extra, px)
                     size = fp.stat().st_size
                     shutil.rmtree(fp.parent, ignore_errors=True)
-                    out.append({"clients": label or "default", "ok": True, "downloaded_bytes": size,
+                    out.append({"clients": label or "default", "via": via, "ok": True, "downloaded_bytes": size,
                                 "seconds": round(time.monotonic() - t0, 1)})
                     break
                 with tempfile.TemporaryDirectory() as d:
-                    with yt_dlp.YoutubeDL(_opts(Path(d), {"skip_download": True, **extra}, ps[n % len(ps)] if ps else None)) as y:
+                    with yt_dlp.YoutubeDL(_opts(Path(d), {"skip_download": True, **extra}, px)) as y:
                         i = y.extract_info(url, download=False)
-                out.append({"clients": label or "default", "ok": True, "title": i.get("title"),
+                out.append({"clients": label or "default", "via": via, "ok": True, "title": i.get("title"),
                             "formats": len(i.get("formats") or []), "seconds": round(time.monotonic() - t0, 1)})
                 break
             except Exception as e:  # noqa: BLE001
                 msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e))
-                out.append({"clients": label or "default", "ok": False, "error": msg[-400:],
+                out.append({"clients": label or "default", "via": via, "ok": False, "error": msg[-400:],
                             "seconds": round(time.monotonic() - t0, 1)})
         return out
 
@@ -802,6 +807,7 @@ async def diagnose(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ", dow
         timed_out = True  # keep whatever was collected: a partial answer beats a bare 5xx
     attempts = out
     return {"url": url, "timed_out": timed_out, "cookies_loaded": bool(_cookies_text()), "proxy_set": bool(_proxies()),
+            "proxy_pool": proxies.status(),
             "pot_provider": await asyncio.to_thread(probe_provider), "pot_autostart": __import__("app.potserver", fromlist=["state"]).state, "pot_log_tail": pot_log(),
             "playability": await asyncio.to_thread(_playability, url), "attempts": attempts}
 
@@ -820,6 +826,23 @@ def _cookie_jar() -> dict[str, str]:
     return jar
 
 
+@router.get("/proxy-test")
+async def proxy_test():
+    """Test every configured proxy against YouTube: which IPs are usable right now, which are 429'd.
+
+    Use it after adding YT_PROXY / YT_PROXY_URL so a dead or blocked proxy is visible instead of looking like
+    "YouTube blocks this server". Credentials are never returned."""
+    pool = proxies.status()
+    if not pool["configured"]:
+        return {"success": True, "configured": 0, "results": [], "hint":
+                "No proxy configured. Set YT_PROXY (one or more, comma separated) or YT_PROXY_URL "
+                "(a provider endpoint returning a list) to rotate egress IPs."}
+    results = await proxies.test()
+    return {"success": True, "configured": pool["configured"], "usable": sum(1 for r in results if r.get("ok")),
+            "blocked": sum(1 for r in results if r.get("blocked")), "results": results,
+            "pool": proxies.status()}
+
+
 @router.get("/probe")
 async def probe(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
     """Raw (non-yt-dlp) request to YouTube from this server, with and without the configured cookies.
@@ -832,7 +855,7 @@ async def probe(url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
     url = knight.canonical(url)
     ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
           "Chrome/131.0.0.0 Safari/537.36")
-    px = _proxies()[0] if _proxies() else None
+    px = proxies.pick()
     jar = _cookie_jar()
 
     async def fetch(target: str, cookies: dict | None):
