@@ -26,21 +26,44 @@ const bytes = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, 
 const mins = s => s ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : '';
 function saveBlob(blob, name) { const u = URL.createObjectURL(blob); const a = el('a', { href: u, download: name }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 5000); }
 
-/* Save one file from an API JSON response ({file:{download_url,filename,size}}) in a click. */
+/* Save one file from an API JSON response ({file:{download_url,filename,size}}) in a click.
+   Downloads can take a minute on a small instance, so show elapsed seconds and, on failure, say what to
+   do about it right under the button instead of only flashing a toast. */
+function grabHint(e) {
+  const m = (e && e.message) || String(e);
+  if (/429|unusual traffic|captcha|blocked this server/i.test(m))
+    return 'YouTube is blocking this server\'s IP (HTTP 429). Cookies will not fix that: set YT_PROXY (or YT_PROXY_URL) to rotate IPs, or keep VDA_API_KEY as the paid fallback.';
+  if (/timed out|timeout/i.test(m)) return 'The download timed out — retry, or pick a shorter lower-quality result.';
+  if (/Private video|age-restricted|members-only|not available in your country/i.test(m)) return m + ' Retrying will not help.';
+  if (/not enabled|_API_KEY is not set/i.test(m)) return m;
+  return m;
+}
 async function grab(url, btn, label) {
   const was = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Fetching…';
+  const card = btn.closest('.card');
+  let note = card && card.querySelector('.grabnote');
+  if (card && !note) { note = el('div', { class: 'meta grabfail' }); card.append(note); }
+  if (note) { note.textContent = ''; note.classList.remove('grabfail'); }
+  let secs = 0;
+  btn.disabled = true; btn.textContent = '0:00 · working…';
+  const tick = setInterval(() => {
+    secs++;
+    btn.textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')} · working…`;
+  }, 1000);
   try {
     const j = await api(url);
     if (!j.file) throw new Error('No file in the response');
     const { blob } = await api(j.file.download_url, { blob: true });
     saveBlob(blob, j.file.filename);
     btn.textContent = 'Saved · ' + bytes(j.file.size);
+    if (note) note.textContent = '';
     toast(label ? label : 'Saved ' + j.file.filename);
   } catch (e) {
     btn.textContent = was;
-    toast('Failed: ' + e.message);
-  } finally { btn.disabled = false; }
+    const hint = grabHint(e);
+    if (note) { note.textContent = 'Failed: ' + hint; note.classList.add('grabfail'); }
+    toast('Failed: ' + (e && e.status ? e.status + ' ' : '') + hint.slice(0, 90));
+  } finally { clearInterval(tick); btn.disabled = false; }
 }
 
 /* ---------- renderers ---------- */
@@ -93,7 +116,7 @@ const R = {
     api(f.download_url, { blob: true }).then(({ blob }) => {
       const u = URL.createObjectURL(blob);
       holder.replaceChildren(el(isA ? 'audio' : 'video', { src: u, controls: '' }), el('button', { class: 'go', onclick: () => saveBlob(blob, f.filename) }, `Save ${isA ? 'MP3' : 'MP4'} (${bytes(f.size)})`));
-    }).catch(e => holder.replaceChildren(el('div', { class: 'err card' }, e.message)));
+    }).catch(e => holder.replaceChildren(el('div', { class: 'err card' }, grabHint(e))));
     return el('div', { class: 'card media' }, d.thumbnail ? el('img', { src: d.thumbnail, alt: '' }) : el('div'), el('div', {}, el('h2', {}, d.title || f.filename), el('div', { class: 'meta' }, [d.uploader, mins(d.duration)].filter(Boolean).join('  ·  '), `  ·  link works for ${d.expires_in_minutes} min`), holder));
   },
   info: d => el('div', { class: 'card media' }, d.thumbnail ? el('img', { src: d.thumbnail, alt: '' }) : el('div'), el('div', {}, el('h2', {}, d.title), el('div', { class: 'meta' }, [d.uploader, mins(d.duration)].filter(Boolean).join('  ·  ')), d.heights?.length ? el('div', {}, 'Qualities: ' + d.heights.map(h => h + 'p').join(', ')) : '')),
