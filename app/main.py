@@ -44,6 +44,7 @@ from .jobs import router as jobs_router
 from .info import router as info_router
 from .security import require_key
 from .admin import router as admin_router
+from .pricing import router as pricing_router
 from .observability import ObservabilityMiddleware, log
 from .ratelimit import RateLimitMiddleware, router as account_router
 
@@ -141,11 +142,22 @@ app.include_router(web_router, dependencies=auth)
 app.include_router(jobs_router, dependencies=auth)  # job boards: search, insights, HN hiring
 app.include_router(info_router, dependencies=auth)  # weather, geocode, holidays, crypto, wiki, books, hn, ip
 app.include_router(admin_router)  # ADMIN_API_KEY only: cookie rotation, MongoDB status
+app.include_router(pricing_router)  # public plans + login-protected editor (own session, no API key)
 app.include_router(account_router, dependencies=auth)  # /v1/account/usage
 
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 app.mount("/ui", StaticFiles(directory=STATIC, html=True), name="ui")
+
+
+@app.get("/pricing", include_in_schema=False)
+async def pricing_page():
+    return FileResponse(STATIC / "pricing.html")
+
+
+@app.get("/pricing-admin", include_in_schema=False)
+async def pricing_admin_page():
+    return FileResponse(STATIC / "pricing-admin.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/", include_in_schema=False)

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Pricing admin - Ladybug API</title>
+<link rel="icon" type="image/svg+xml" href="/ui/brand/favicon.svg">
+<script>(function(){try{var t=localStorage.getItem("lb_theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ui/style.css">
+<link rel="stylesheet" href="/ui/pricing.css">
+</head>
+<body>
+<main class="pr-wrap pr-narrow">
+  <a class="pr-brand" href="/"><img src="/ui/brand/mark.svg" alt="" width="28" height="28"> Ladybug API</a>
+  <h1>Pricing admin</h1>
+
+  <form id="login" class="pr-panel" hidden>
+    <label>Username <input id="u" autocomplete="username" required></label>
+    <label>Password <input id="p" type="password" autocomplete="current-password" required></label>
+    <button class="pr-btn" type="submit">Log in</button>
+    <p id="lerr" class="pr-err" role="alert"></p>
+  </form>
+
+  <section id="editor" hidden>
+    <div class="pr-bar"><span id="who" class="pr-muted"></span><button id="out" class="pr-btn pr-ghost" type="button">Log out</button></div>
+    <label class="pr-cur">Currency <input id="cur" maxlength="3" value="USD"></label>
+    <div id="rows"></div>
+    <div class="pr-bar">
+      <button id="add" class="pr-btn pr-ghost" type="button">Add plan</button>
+      <button id="save" class="pr-btn" type="button">Save pricing</button>
+    </div>
+    <p id="msg" class="pr-muted" role="status"></p>
+  </section>
+</main>
+<script src="/ui/pricing-admin.js"></script>
+</body></html>

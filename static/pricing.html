@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Pricing - Ladybug API</title>
+<link rel="icon" type="image/svg+xml" href="/ui/brand/favicon.svg">
+<script>(function(){try{var t=localStorage.getItem("lb_theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ui/style.css">
+<link rel="stylesheet" href="/ui/pricing.css">
+</head>
+<body>
+<main class="pr-wrap">
+  <header class="pr-head">
+    <a class="pr-brand" href="/"><img src="/ui/brand/mark.svg" alt="" width="28" height="28"> Ladybug API</a>
+    <h1>Simple pricing</h1>
+    <p id="sub">One API for media, images, AI, scraping and business tools.</p>
+  </header>
+  <section id="plans" class="pr-grid" aria-live="polite"><p class="pr-muted">Loading plans...</p></section>
+  <p class="pr-foot pr-muted">Quotas reset monthly. Need more? Ask about custom limits.</p>
+</main>
+<script>
+const fmt = (n, c) => n === 0 ? 'Free' : new Intl.NumberFormat('en', { style: 'currency', currency: c, maximumFractionDigits: n % 1 ? 2 : 0 }).format(n);
+fetch('/v1/pricing').then(r => r.json()).then(d => {
+  const el = document.getElementById('plans'); el.textContent = '';
+  d.plans.forEach(p => {
+    const card = document.createElement('article'); card.className = 'pr-card' + (p.highlight ? ' pr-hi' : '');
+    const h = document.createElement('h2'); h.textContent = p.name;
+    const price = document.createElement('div'); price.className = 'pr-price';
+    price.textContent = fmt(p.price_monthly, d.currency);
+    if (p.price_monthly > 0) { const s = document.createElement('span'); s.textContent = ' /month'; price.append(s); }
+    const q = document.createElement('div'); q.className = 'pr-quota'; q.textContent = p.requests_per_month.toLocaleString('en') + ' requests / month';
+    const ul = document.createElement('ul'); (p.features || []).forEach(f => { const li = document.createElement('li'); li.textContent = f; ul.append(li); });
+    card.append(h, price, q, ul); el.append(card);
+  });
+}).catch(() => { document.getElementById('plans').textContent = 'Could not load pricing.'; });
+</script>
+</body></html>

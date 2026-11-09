@@ -1,0 +1,30 @@
+.pr-wrap{max-width:1040px;margin:0 auto;padding:40px 20px 64px}
+.pr-narrow{max-width:760px}
+.pr-brand{display:inline-flex;align-items:center;gap:10px;font:700 18px var(--display);color:var(--ink);text-decoration:none}
+.pr-head{text-align:center;margin-bottom:32px}
+.pr-head h1,.pr-wrap h1{font:700 40px/1.1 var(--display);margin:18px 0 8px}
+.pr-muted{color:var(--ink2)}
+.pr-err{color:var(--red)}
+.pr-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
+.pr-card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;box-shadow:var(--shadow)}
+.pr-hi{border-color:var(--red);box-shadow:var(--ring)}
+.pr-card h2{font:700 20px var(--display);margin:0 0 8px}
+.pr-price{font:700 34px var(--display)}
+.pr-price span{font:400 14px var(--body);color:var(--ink2)}
+.pr-quota{margin:6px 0 14px;color:var(--ink2);font-weight:500}
+.pr-card ul{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.pr-card li:before{content:"\2713";color:var(--ok);margin-right:8px}
+.pr-foot{text-align:center;margin-top:24px}
+.pr-panel{display:grid;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;max-width:380px}
+.pr-wrap label{display:grid;gap:4px;font-weight:500}
+.pr-wrap input,.pr-wrap textarea{background:var(--field);border:1px solid var(--line2);border-radius:8px;padding:8px 10px}
+.pr-wrap input:focus,.pr-wrap textarea:focus{outline:none;box-shadow:var(--ring);border-color:var(--red)}
+.pr-btn{background:var(--red);color:#fff;border:0;border-radius:8px;padding:9px 16px;font-weight:600;cursor:pointer}
+.pr-btn:hover{background:var(--red-d)}
+.pr-ghost{background:transparent;color:var(--ink);border:1px solid var(--line2)}
+.pr-ghost:hover{background:var(--hover)}
+.pr-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:16px 0}
+.pr-row{display:flex;flex-wrap:wrap;gap:12px;align-items:end;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:12px}
+.pr-wide{flex:1 1 100%}
+.pr-wide textarea{width:100%}
+.pr-cur input{width:5rem;text-transform:uppercase}
