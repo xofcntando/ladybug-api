@@ -38,6 +38,29 @@ All under `/v1` need `X-API-Key`. Full interactive list at `/docs`.
 `GET /v1/youtube/search|video|channel|channel/videos|playlist|comments|quota` answer from the official YouTube Data API v3 (`YOUTUBE_API_KEY`, or several in `YOUTUBE_API_KEYS`). Metadata only, cached `YT_API_CACHE_MINUTES` (60), search costs 100 of the 10,000 daily units, everything else 1.
 **No key?** `search` and `video` still work: they come from the keyless route (yt-dlp -> YouTube results page -> oEmbed) and say so with `"source": "keyless"` plus a `note`, in the same response shape. `channel`, `channel/videos`, `playlist` and `comments` have no keyless equivalent, so they return `503` with a pointer to `/v1/yt/*` instead of a dead end, and `quota` reports `keys: 0` rather than failing.
 
+### Downloads hub: images, batches, site icons, and YouTube batches
+Image and YouTube files all come back as stored files (`file.download_url`), never as raw streams inside JSON:
+- `POST /v1/image/fetch` `{url, format, max_width, quality}` — fetch any public image, re-encode it (png/jpeg/webp, always re-encoded so an SVG/HTML body can never come back executable), downscale to `max_width`, return the stored file plus original and final dimensions.
+- `POST /v1/image/batch` `{urls[<=10], format, max_width}` — one `.zip` of up to ten images. If the archive would exceed the size cap, the images are still stored and returned individually with an `archive_error` instead of losing the work.
+- `GET /v1/image/favicon?domain=&size=` — a site's icon, normalised to a square PNG (tries `/favicon.ico`, apple-touch-icon, DuckDuckGo, Google `s2`).
+- `GET /v1/image/search?q=&source=all|pexels|pixabay|nasa|commons|archive` — one image search across every free source; each hit carries a ready `save.url` that downloads the file.
+- `GET /v1/yt/download?url=|id=&type=&quality=&audio_format=&subtitles=true` — explicit download; with `subtitles=true` the captions come back as a separate `.srt` stored file next to the audio (and the audio still returns if the captions are missing).
+- `POST /v1/yt/batch` `{urls[<=5], type, quality, audio_format, zip}` — sequential (the media slot is size 1), one `.zip`, per-item `failed[]`, and the same archive fallback.
+- `GET /v1/yt/playlist/download?url=|id=&max=3` — first N videos of a playlist as one `.zip`.
+
+### YouTube extras: captions, chapters, thumbnails, suggestions, related, comments, channels, playlists
+All keyless (no Google API key), all under `/v1/yt`:
+- `GET /v1/yt/transcript?url=|id=&format=text|srt|vtt|json&lang=&auto=` — captions from uploaded tracks first, then YouTube's auto-captions. Parses `json3` and WEBVTT; rolling auto-caption windows are collapsed into sentences for `text`.
+- `GET /v1/yt/chapters?url=|id=` — chapter titles with `&t=` jump links.
+- `GET /v1/yt/thumbnail?id=&size=default|medium|high|standard|hq720|maxres[&download=true]` — every size, built locally (no upstream call); `download=true` redirects straight to the image.
+- `GET /v1/yt/suggest?q=&hl=` — YouTube autocomplete, cached 10 min, never fails the caller.
+- `GET /v1/yt/related?url=|id=&limit=` — YouTube's own recommendations via the InnerTube `next` API (cached 15 min). The watch page no longer embeds them, so `lockupViewModel` entries are parsed, with the legacy `videoRenderer` shape still supported.
+- `GET /v1/yt/comments?url=|id=&max=` — top comments in ~1 s from two InnerTube calls. (yt-dlp can fetch comments too, but needs 30–90 s of paginated round trips; that path is gone.)
+- `GET /v1/yt/channel?handle=@name|id=&tab=videos|shorts|streams&max=` — latest uploads, flat listing (one request, no per-video extraction).
+- `GET /v1/yt/playlist?url=|id=&max=` — playlist contents, flat listing.
+
+The console exposes all eight (YouTube group is 18 tools), with a transcript viewer that exports SRT/VTT/TXT/JSON, a thumbnail grid, chapters with jump links, and suggestion chips that jump straight into search.
+
 ### Free media: NASA, Wikimedia Commons, Internet Archive video, Pexels
 `GET /v1/free/sources`, `/v1/free/search?q=moon&source=all|nasa|commons|archive|pexels&kind=video|image|audio&commercial_only=true`, `/v1/free/download?id=nasa:PIA12235&quality=small` (or `stream=true`). NASA, Commons and Archive need no key; Pexels turns on when `PEXELS_API_KEY` is set (free). Every result carries `license`, `commercial_use` and an `attribution` line. Downloads are capped at `MEDIA_MAX_MB` (default 50); big videos return 413, retry with `quality=small|tiny` or raise the cap.
 

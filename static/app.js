@@ -331,6 +331,49 @@ const R = {
       + (d.proxy_pool.source_url_set ? ` · rotating list from YT_PROXY_URL (every ${d.proxy_pool.refresh_minutes} min)` : '')
       + (d.proxy_pool.configured ? '' : ' · none configured: downloads use the server IP, which is what YouTube 429s')) : '',
     d.backend_last_error && Object.keys(d.backend_last_error).length ? el('pre', { class: 'json' }, JSON.stringify(d.backend_last_error, null, 2)) : ''),
+
+  transcript: d => {
+    const body = d.format === 'json' ? JSON.stringify(d.transcript, null, 2) : d.transcript;
+    const name = `${d.id}.${d.format === 'text' ? 'txt' : d.format}`;
+    const bar = el('div', { class: 'bar' },
+      el('span', {}, `${d.lang || '?'} · ${d.type}${d.auto ? ' (auto)' : ''} · ${d.cues} cues · ${mins(d.duration_seconds)}`),
+      el('button', { class: 'sm', onclick: () => saveBlob(new Blob([body], { type: 'text/plain' }), name) }, 'Save ' + d.format.toUpperCase()));
+    ['srt', 'vtt', 'text', 'json'].forEach(f => {
+      if (f === d.format) return;
+      const b = el('button', { class: 'sm' }, 'As ' + f.toUpperCase());
+      b.addEventListener('click', async () => {
+        b.disabled = true;
+        try { const j = await api('/v1/yt/transcript?' + qs({ id: d.id, format: f, lang: d.lang })); renderNode(j); }
+        catch (e) { toast(e.message); } finally { b.disabled = false; }
+      });
+      bar.append(b);
+    });
+    const box = el('div', { class: 'card' });
+    const renderNode = j => {
+      const text = j.format === 'json' ? JSON.stringify(j.transcript, null, 2) : j.transcript;
+      box.replaceChildren(bar, copyBar('Copy', text), el('pre', { class: 'json', style: 'white-space:pre-wrap;max-height:520px;overflow:auto' }, text));
+    };
+    renderNode(d);
+    return box;
+  },
+  chapters: d => el('div', { class: 'card' }, el('h2', {}, d.title || d.id),
+    d.count ? el('ol', { style: 'margin:12px 0 0;padding-left:20px' }, d.chapters.map(c =>
+      el('li', {}, el('a', { href: c.url, target: '_blank', rel: 'noopener' }, c.title || 'untitled'), ' ',
+        el('span', { class: 'meta' }, `${mins(Math.round(Number(c.start_time) || 0))}${c.end_time ? ' – ' + mins(Math.round(Number(c.end_time))) : ''}`))))
+      : el('div', { class: 'empty' }, 'This video has no chapters.')),
+  thumbs: d => el('div', { class: 'card' },
+    el('p', { class: 'meta' }, 'Click a size to download it straight from YouTube.'),
+    el('div', { class: 'swatches' }, Object.entries(d.sizes).map(([name, v]) =>
+      el('a', { href: v.url, onclick: e => { e.preventDefault(); window.open(v.url.replace('i.ytimg.com/vi', 'i.ytimg.com/vi'), '_blank'); } },
+        el('div', { style: 'width:150px' }, el('img', { src: v.url, alt: name, loading: 'lazy', style: 'width:150px;border-radius:8px' }),
+          el('div', { class: 'meta' }, name, ' · ', v.resolution)))))),
+  suggestions: d => {
+    const chips = (d.suggestions || []).map(x =>
+      el('button', { type: 'button', onclick: () => open('yt-search', { query: x }) }, x));
+    return el('div', { class: 'card' },
+      el('div', { class: 'meta' }, `${d.count} suggestions for \u201c${d.query}\u201d`),
+      el('div', { class: 'quick', style: 'margin-top:10px' }, chips));
+  },
 };
 function copyBar(label, text) { return el('div', { class: 'bar' }, el('span', {}, label), el('button', { class: 'sm', onclick: e => { navigator.clipboard.writeText(text); e.target.textContent = 'Copied'; setTimeout(() => e.target.textContent = 'Copy', 1500); } }, 'Copy')); }
 
@@ -396,8 +439,50 @@ const TOOLS = [
   { g: 'YouTube', id: 'yt-api-search', name: 'Official API search', desc: 'The same search with the official YouTube Data API result shape. Works without a key too (keyless route); a key adds exact counts and channel/playlist search.',
     fields: [T('q', 'Search', { def: 'aurora borealis' }), S('type', 'Type', [['video', 'Videos'], ['channel', 'Channels (needs key)'], ['playlist', 'Playlists (needs key)']]), { k: 'max', label: 'Results', type: 'number', def: 10 }], submit: 'Search', run: get('/v1/youtube/search', 'ytsearch') },
   { g: 'YouTube', id: 'yt-api-video', name: 'Official API video', desc: 'Video metadata in the official videos.list shape. Keyless works too, with fewer fields.', fields: [T('id', 'Video id', { ph: 'dQw4w9WgXcQ' })], submit: 'Get video', run: get('/v1/youtube/video', 'ytvideo') },
-  { g: 'YouTube', id: 'yt-comments', name: 'Comments', desc: 'Top comments for a video. Needs YOUTUBE_API_KEY.', fields: [T('id', 'Video id', { ph: 'dQw4w9WgXcQ' }), { k: 'max', label: 'How many', type: 'number', def: 20 }], submit: 'Get comments', run: get('/v1/youtube/comments', 'comments') },
+  { g: 'YouTube', id: 'yt-api-comments', name: 'Comments (official API)', desc: 'Top comments through the official YouTube Data API. Needs YOUTUBE_API_KEY; the keyless version is "Comments".', fields: [T('id', 'Video id', { ph: 'dQw4w9WgXcQ' }), { k: 'max', label: 'How many', type: 'number', def: 20 }], submit: 'Get comments', run: get('/v1/youtube/comments', 'comments') },
   { g: 'YouTube', id: 'yt-quota', name: 'API quota', desc: 'Official API units spent today, or a note that the keyless route is in use.', fields: [], submit: 'Check quota', run: get('/v1/youtube/quota') },
+
+
+  { g: 'Images', id: 'img-dl', name: 'Download an image', desc: 'Give it any image URL: it is fetched, re-encoded (png/jpeg/webp) and stored. Optional max width, so you do not ship a 4 MB photo.',
+    fields: [T('url', 'Image URL', { ph: 'https://…/photo.jpg' }), S('format', 'Output', [['png', 'PNG'], ['jpeg', 'JPEG (smallest for photos)'], ['webp', 'WebP']]),
+      { k: 'max_width', label: 'Max width (px)', type: 'number', def: 2048 }, { k: 'quality', label: 'Quality', type: 'number', def: 85 }],
+    submit: 'Download', run: post('/v1/image/fetch', v => ({ url: v.url, format: v.format, max_width: +v.max_width || null, quality: +v.quality || 85 }), 'filecard') },
+  { g: 'Images', id: 'img-batch', name: 'Download many images (ZIP)', desc: 'Up to 10 image URLs in one request, resized and returned as a single .zip.',
+    fields: [{ k: 'urls', label: 'Image URLs (one per line)', type: 'textarea', ph: 'https://…/1.jpg\nhttps://…/2.jpg' },
+      S('format', 'Output', [['png', 'PNG'], ['jpeg', 'JPEG'], ['webp', 'WebP']]), { k: 'max_width', label: 'Max width (px)', type: 'number', def: 2048 }],
+    submit: 'Download all', run: post('/v1/image/batch', v => ({ urls: v.urls.split('\n').map(x => x.trim()).filter(Boolean), format: v.format, max_width: +v.max_width || null }), 'filecard') },
+  { g: 'Images', id: 'img-favicon', name: 'Site icon', desc: 'Download any site’s favicon, normalised to a square PNG of the size you pick.',
+    fields: [T('domain', 'Domain', { def: 'github.com', ph: 'github.com' }), { k: 'size', label: 'Size (px)', type: 'number', def: 64 }], submit: 'Get icon', run: get('/v1/image/favicon', 'filecard') },
+  { g: 'Images', id: 'img-search', name: 'Image search (all sources)', desc: 'One search across NASA, Wikimedia Commons, Internet Archive, Pexels and Pixabay. Every hit comes with the exact save call.',
+    fields: [T('q', 'Search', { def: 'coffee', ph: 'coffee, nebula, mountains' }), S('source', 'Source', [['all', 'All sources'], ['pexels', 'Pexels'], ['pixabay', 'Pixabay'], ['nasa', 'NASA'], ['commons', 'Wikimedia Commons'], ['archive', 'Internet Archive']]), { k: 'limit', label: 'Results', type: 'number', def: 12 }],
+    submit: 'Search', run: get('/v1/image/search', 'freemedia') },
+
+  { g: 'YouTube', id: 'yt-download', name: 'Download (with subtitles)', desc: 'Explicit download endpoint: audio or video, and optionally the captions as a separate .srt next to it.',
+    fields: [T('id', 'Video link or id', { ph: 'https://youtu.be/…' }), S('type', 'Format', [['audio', 'Audio'], ['video', 'MP4 video']]),
+      S('audio_format', 'Audio file', [['m4a', 'M4A (no re-encode)'], ['mp3', 'MP3']], { show: v => v.type === 'audio' }),
+      S('quality', 'Video quality', Q, { def: '360', show: v => v.type === 'video' }),
+      S('subtitles', 'Subtitles', [['false', 'No'], ['true', 'Also return .srt']])],
+    submit: 'Download', run: get('/v1/yt/download', 'media') },
+  { g: 'YouTube', id: 'yt-batch', name: 'Batch download (ZIP)', desc: 'Up to 5 videos in one request, returned as a single .zip. If the archive would be too big, the files come back individually instead.',
+    fields: [{ k: 'urls', label: 'Links (one per line)', type: 'textarea', ph: 'https://youtu.be/…\nhttps://youtu.be/…' },
+      S('type', 'Format', [['audio', 'Audio'], ['video', 'MP4 video']]), S('audio_format', 'Audio file', [['m4a', 'M4A (fast)'], ['mp3', 'MP3']], { show: v => v.type === 'audio' }),
+      S('quality', 'Video quality', Q, { def: '360', show: v => v.type === 'video' })],
+    submit: 'Download batch', run: post('/v1/yt/batch', v => ({ urls: v.urls.split('\n').map(x => x.trim()).filter(Boolean), type: v.type, quality: +v.quality || 360, audio_format: v.audio_format || 'm4a', zip: true }), 'filecard') },
+  { g: 'YouTube', id: 'yt-playlist-dl', name: 'Playlist download (ZIP)', desc: 'Download the first few videos of a playlist as one .zip. Capped on purpose: it is a real download per video.',
+    fields: [T('id', 'Playlist URL or id', { ph: 'https://www.youtube.com/playlist?list=…' }), { k: 'max', label: 'How many (max 5)', type: 'number', def: 3 },
+      S('type', 'Format', [['audio', 'Audio'], ['video', 'MP4 video']]), S('audio_format', 'Audio file', [['m4a', 'M4A (fast)'], ['mp3', 'MP3']], { show: v => v.type === 'audio' })],
+    submit: 'Download playlist', run: get('/v1/yt/playlist/download', 'filecard') },
+  { g: 'YouTube', id: 'yt-transcript', name: 'Transcript / captions', desc: 'Full captions as plain text, SRT, WEBVTT or timed JSON. Manual tracks first, then YouTube auto-captions. No Google key.',
+    fields: [T('id', 'Video link or id', { ph: 'dQw4w9WgXcQ' }), S('format', 'Format', [['text', 'Plain text'], ['srt', 'SRT subtitles'], ['vtt', 'WEBVTT'], ['json', 'Timed JSON']]),
+      T('lang', 'Language (blank = auto)', { ph: 'en, hu, es' }), S('auto', 'Auto-captions', [['true', 'Allow'], ['false', 'Manual tracks only']])],
+    submit: 'Get transcript', run: get('/v1/yt/transcript', 'transcript') },
+  { g: 'YouTube', id: 'yt-chapters', name: 'Chapters', desc: 'Chapter titles with jump links, when the uploader added them.', fields: [T('id', 'Video link or id', { ph: 'dQw4w9WgXcQ' })], submit: 'Get chapters', run: get('/v1/yt/chapters', 'chapters') },
+  { g: 'YouTube', id: 'yt-thumbs', name: 'Thumbnails', desc: 'Every thumbnail size for a video, no network call: default, medium, high, standard, hq720, maxres.', fields: [T('id', 'Video link or id', { ph: 'dQw4w9WgXcQ' })], submit: 'Show sizes', run: get('/v1/yt/thumbnail', 'thumbs') },
+  { g: 'YouTube', id: 'yt-suggest', name: 'Search suggestions', desc: 'YouTube autocomplete for a query — handy for picking what to search or download.', fields: [T('q', 'Start typing', { ph: 'lofi hip' }), T('hl', 'Language', { def: 'en' })], submit: 'Suggest', run: get('/v1/yt/suggest', 'suggestions') },
+  { g: 'YouTube', id: 'yt-related', name: 'Related videos', desc: 'What YouTube recommends next to a video, parsed from its InnerTube feed.', fields: [T('id', 'Video link or id', { ph: 'dQw4w9WgXcQ' }), { k: 'limit', label: 'How many', type: 'number', def: 12 }], submit: 'Find related', run: get('/v1/yt/related', 'ytsearch') },
+  { g: 'YouTube', id: 'yt-comments', name: 'Comments', desc: 'Top comments in about a second (two InnerTube requests, no Google key).', fields: [T('id', 'Video link or id', { ph: 'dQw4w9WgXcQ' }), { k: 'max', label: 'How many', type: 'number', def: 20 }], submit: 'Get comments', run: get('/v1/yt/comments', 'comments') },
+  { g: 'YouTube', id: 'yt-channel', name: 'Channel videos', desc: 'Latest uploads of a channel (flat listing: one request, no per-video extraction).', fields: [T('handle', 'Handle', { ph: '@NASA' }), S('tab', 'Tab', [['videos', 'Videos'], ['shorts', 'Shorts'], ['streams', 'Live']]), { k: 'max', label: 'How many', type: 'number', def: 20 }], submit: 'List videos', run: get('/v1/yt/channel', 'ytsearch') },
+  { g: 'YouTube', id: 'yt-playlist', name: 'Playlist videos', desc: 'Every video in a playlist, with durations. Accepts a playlist URL or id.', fields: [T('url', 'Playlist URL or id', { ph: 'https://www.youtube.com/playlist?list=…' }), { k: 'max', label: 'How many', type: 'number', def: 50 }], submit: 'List playlist', run: get('/v1/yt/playlist', 'ytsearch') },
   { g: 'YouTube', id: 'yt-proxy', name: 'Egress IPs (proxy pool)', desc: 'Which egress IPs are usable right now and which YouTube has 429-blocked. Add YT_PROXY or YT_PROXY_URL to rotate IPs so one ban does not stop every download.',
     fields: [], submit: 'Test IPs', run: get('/v1/media/proxy-test', 'proxies') },
   { g: 'YouTube', id: 'yt-engines', name: 'Download engines', desc: 'What is available right now: self-hosted yt-dlp, the PO-token provider, Cobalt, VDA, KnightBot and the official API. Shows the order the API will try.',
