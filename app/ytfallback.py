@@ -124,8 +124,24 @@ async def cobalt_fetch(url: str, kind: str, quality: int, max_minutes: int):
 # ---- video-download-api.com (optional, paid per request: ~$0.0002 per MP3 / MP4). Set VDA_API_KEY. ------------------
 # This is the engine behind many "free ytmp3" sites, with its own proxy pool, so it works from Render's IP.
 # Docs: https://video-download-api.com/api/docs  (new accounts get a one-time test credit of ~25 requests).
-VDA_KEY = os.getenv("VDA_API_KEY", "")  # one key, or up to 20 separated by commas / spaces / newlines
-VDA_KEYS = list(dict.fromkeys(k for k in re.split(r"[,\s]+", VDA_KEY) if k))[:20]
+VDA_KEY = os.getenv("VDA_API_KEY", "")  # keys separated by commas / spaces / newlines
+VDA_MAX_KEYS = int(os.getenv("VDA_MAX_KEYS", "1000000"))  # hard cap on how many keys are loaded
+VDA_MAX_TRIES = int(os.getenv("VDA_MAX_TRIES", "25"))  # keys tried per request before giving up (keeps requests fast with huge pools)
+
+
+def _load_vda_keys() -> list[str]:
+    raw = VDA_KEY
+    path = os.getenv("VDA_KEYS_FILE", "").strip()  # optional: file with one key per line (env vars are size-limited)
+    if path:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                raw += "\n" + fh.read()
+        except OSError:
+            pass
+    return list(dict.fromkeys(k for k in re.split(r"[,\s]+", raw) if k))[:VDA_MAX_KEYS]
+
+
+VDA_KEYS = _load_vda_keys()
 VDA_BASE = os.getenv("VDA_API_BASE", "https://p.savenow.to").rstrip("/")
 VDA_VIDEO_Q = [144, 240, 360, 480, 720, 1080]
 VDA_BALANCE_COOLDOWN = 600  # an empty key is skipped for 10 minutes (it may be topped up), then tried again
@@ -168,7 +184,7 @@ async def vda_fetch(url: str, kind: str, quality: int, max_minutes: int):
         raise HTTPException(502, "VDA: no usable key (all out of balance or invalid) - top up at https://video-download-api.com/dashboard")
     start = _vda_rr % len(keys)
     _vda_rr += 1
-    keys = keys[start:] + keys[:start]
+    keys = (keys[start:] + keys[:start])[:VDA_MAX_TRIES]
     r = d = None
     for key in keys:
         try:
