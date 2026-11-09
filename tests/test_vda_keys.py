@@ -77,11 +77,11 @@ def test_empty_key_is_retried_after_cooldown(monkeypatch):
     assert "a" in yf._vda_usable()
 
 
-def test_key_list_parsing_caps_at_ten():
+def test_key_list_parsing_caps_at_twenty():
     import re
-    raw = ",".join(f"k{i}" for i in range(15)) + ", k0"
-    keys = list(dict.fromkeys(k for k in re.split(r"[,\s]+", raw) if k))[:10]
-    assert len(keys) == 10
+    raw = ",".join(f"k{i}" for i in range(25)) + ", k0"
+    keys = list(dict.fromkeys(k for k in re.split(r"[,\s]+", raw) if k))[:20]
+    assert len(keys) == 20
 
 
 def test_backoff_grows_then_caps_and_resets():

@@ -124,8 +124,8 @@ async def cobalt_fetch(url: str, kind: str, quality: int, max_minutes: int):
 # ---- video-download-api.com (optional, paid per request: ~$0.0002 per MP3 / MP4). Set VDA_API_KEY. ------------------
 # This is the engine behind many "free ytmp3" sites, with its own proxy pool, so it works from Render's IP.
 # Docs: https://video-download-api.com/api/docs  (new accounts get a one-time test credit of ~25 requests).
-VDA_KEY = os.getenv("VDA_API_KEY", "")  # one key, or up to 10 separated by commas / spaces / newlines
-VDA_KEYS = list(dict.fromkeys(k for k in re.split(r"[,\s]+", VDA_KEY) if k))[:10]
+VDA_KEY = os.getenv("VDA_API_KEY", "")  # one key, or up to 20 separated by commas / spaces / newlines
+VDA_KEYS = list(dict.fromkeys(k for k in re.split(r"[,\s]+", VDA_KEY) if k))[:20]
 VDA_BASE = os.getenv("VDA_API_BASE", "https://p.savenow.to").rstrip("/")
 VDA_VIDEO_Q = [144, 240, 360, 480, 720, 1080]
 VDA_BALANCE_COOLDOWN = 600  # an empty key is skipped for 10 minutes (it may be topped up), then tried again
