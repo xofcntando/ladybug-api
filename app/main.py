@@ -34,6 +34,7 @@ from .ytapi import router as ytapi_router
 from .own import router as own_router
 from .youtube import router as youtube_router
 from .ytplus import router as ytplus_router
+from .dlplus import router as dlplus_router
 from .knight_compat import router as compat_router, public as compat_public
 from .cards import router as cards_router
 from .scrape import router as scrape_router
@@ -131,6 +132,7 @@ app.include_router(ytapi_router, dependencies=auth)  # official YouTube Data API
 app.include_router(own_router, dependencies=auth)  # self-hosted: lyrics, cards, fun, screenshot, removebg, tweet
 app.include_router(youtube_router, dependencies=auth)  # self-hosted YouTube: search / play / video / formats
 app.include_router(ytplus_router, dependencies=auth)  # transcripts, chapters, thumbnails, suggestions, related, comments, channel, playlist
+app.include_router(dlplus_router, dependencies=auth)  # image fetch/batch/favicon/search + yt download/batch/playlist zip
 app.include_router(compat_router)
 app.include_router(compat_public)
 app.include_router(cards_router, dependencies=auth)

@@ -183,12 +183,9 @@ def best_caption_url(track: list[dict]) -> tuple[str | None, str]:
     return None, ""
 
 
-@router.get("/transcript")
-async def transcript(url: str | None = None, id: str | None = None,
-                     format: str = Query("text", pattern="^(text|srt|vtt|json)$"),
-                     lang: str | None = Query(None, max_length=10, description="e.g. en, hu, es-ES"),
-                     auto: bool = Query(True, description="Allow YouTube's automatic captions when no manual track exists")):
-    """Captions for a video as plain text, SRT, WEBVTT or timed JSON. No Google API key needed."""
+async def captions(url: str | None = None, id: str | None = None, format: str = "text",
+                    lang: str | None = None, auto: bool = True) -> dict:
+    """Caption payload for a video. Plain helper: endpoints (and other modules) pass real values."""
     vid = _vid(url, id)
     i = await _info(_canon(vid))
     manual = i.get("subtitles") or {}
@@ -229,7 +226,17 @@ async def transcript(url: str | None = None, id: str | None = None,
         return {**common, "format": "vtt", "transcript": cues_to_vtt(cues)}
     if format == "json":
         return {**common, "format": "json", "transcript": cues}
-    return {**common, "format": "text", "transcript": cues_to_text(cues), "chars": len(cues_to_text(cues))}
+    text = cues_to_text(cues)
+    return {**common, "format": "text", "transcript": text, "chars": len(text)}
+
+
+@router.get("/transcript")
+async def transcript(url: str | None = None, id: str | None = None,
+                     format: str = Query("text", pattern="^(text|srt|vtt|json)$"),
+                     lang: str | None = Query(None, max_length=10, description="e.g. en, hu, es-ES"),
+                     auto: bool = Query(True, description="Allow YouTube's automatic captions when no manual track exists")):
+    """Captions for a video as plain text, SRT, WEBVTT or timed JSON. No Google API key needed."""
+    return await captions(url=url, id=id, format=format, lang=lang, auto=auto)
 
 
 # ---------------------------------------------------------------- chapters / thumbnails
