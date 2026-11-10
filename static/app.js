@@ -485,7 +485,7 @@ const TOOLS = [
   { g: 'YouTube', id: 'yt-playlist', name: 'Playlist videos', desc: 'Every video in a playlist, with durations. Accepts a playlist URL or id.', fields: [T('url', 'Playlist URL or id', { ph: 'https://www.youtube.com/playlist?list=…' }), { k: 'max', label: 'How many', type: 'number', def: 50 }], submit: 'List playlist', run: get('/v1/yt/playlist', 'ytsearch') },
   { g: 'YouTube', id: 'yt-proxy', name: 'Egress IPs (proxy pool)', desc: 'Which egress IPs are usable right now and which YouTube has 429-blocked. Add YT_PROXY or YT_PROXY_URL to rotate IPs so one ban does not stop every download.',
     fields: [], submit: 'Test IPs', run: get('/v1/media/proxy-test', 'proxies') },
-  { g: 'YouTube', id: 'yt-engines', name: 'Download engines', desc: 'What is available right now: self-hosted yt-dlp, the PO-token provider, Cobalt, Vid Kraken, VDA, Supadata, KnightBot and the official API. Shows the order the API will try.',
+  { g: 'YouTube', id: 'yt-engines', name: 'Download engines', desc: 'What is available right now: self-hosted yt-dlp, the PO-token provider, Cobalt, Vid Kraken, VDA, YouTube Scraper API, Supadata, KnightBot and the official API. Shows the order the API will try.',
     fields: [], submit: 'Check engines', run: get('/v1/media/status', 'engines') },
 
   { g: 'YouTube', id: 'sd-video', name: 'Video details (Supadata)', desc: 'Title, description, duration, channel, views, likes, tags and transcript languages from Supadata. Works even when YouTube blocks this server. Needs SUPADATA_API_KEY.',
@@ -678,7 +678,19 @@ const TOOLS = [
   { g: 'Account', id: 'acc-dl', name: 'Downloader status', desc: 'Is the media downloader healthy? Cookies, PO-token and backend state.', fields: [], submit: 'Check status', run: get('/v1/media/status') },
   { g: 'Account', id: 'acc-diag', name: 'Downloader diagnose', desc: 'Test a YouTube link end to end and see where it fails.', fields: [T('url', 'Test link', { def: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' })], submit: 'Diagnose', run: get('/v1/media/diagnose') },
   { g: 'Account', id: 'acc-probe', name: 'YouTube probe', desc: 'Raw request with and without cookies, with a verdict.', fields: [T('url', 'Test link', { def: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' })], submit: 'Probe', run: get('/v1/media/probe') },
+  { g: 'YouTube Scraper API', id: 'ysa-search', name: 'Search', desc: 'Organic results and ads for a YouTube search, from YouTube Scraper API. Used first by Search YouTube when yt-dlp is blocked.', fields: [T('query', 'Search', { def: 'lofi beats', ph: 'lofi beats' })], submit: 'Search', run: get('/v1/ysa/search') },
+  { g: 'YouTube Scraper API', id: 'ysa-video', name: 'Video', desc: 'Title, description, views, likes, duration, tags, category, channel and related videos.', fields: [T('id', 'Video link or id', { ph: 'dQw4w9WgXcQ' })], submit: 'Get video', run: get('/v1/ysa/video') },
+  { g: 'YouTube Scraper API', id: 'ysa-transcript', name: 'Transcript', desc: 'Timed segments and full text for a video, with the available caption languages.', fields: [T('id', 'Video link or id', { ph: 'dQw4w9WgXcQ' }), S('format', 'Return', [['both', 'Segments and text'], ['segments', 'Timed segments'], ['text', 'Text only']]), S('units', 'Time unit', [['seconds', 'Seconds'], ['ms', 'Milliseconds']])], submit: 'Get transcript', run: get('/v1/ysa/transcript') },
+  { g: 'YouTube Scraper API', id: 'ysa-channel', name: 'Channel', desc: 'Channel details and its latest videos. Pass the next page token to keep paging.', fields: [T('channel', 'Handle, id or link', { ph: '@mkbhd' }), T('page_token', 'Page token (optional)')], submit: 'Get channel', run: get('/v1/ysa/channel') },
+  { g: 'YouTube Scraper API', id: 'ysa-playlist', name: 'Playlist', desc: 'Ordered video list with titles, links and view counts.', fields: [T('url', 'Playlist link or id', { ph: 'https://www.youtube.com/playlist?list=…' })], submit: 'Get playlist', run: get('/v1/ysa/playlist') },
+  { g: 'YouTube Scraper API', id: 'ysa-comments', name: 'Comments', desc: 'Top or newest comments with likes and reply counts.', fields: [T('id', 'Video link or id', { ph: 'dQw4w9WgXcQ' }), S('sort', 'Order', [['top', 'Top'], ['newest', 'Newest']])], submit: 'Get comments', run: get('/v1/ysa/comments') },
+  { g: 'YouTube Scraper API', id: 'ysa-shorts', name: 'Shorts', desc: 'Metadata for one YouTube Short.', fields: [T('id', 'Short link or id', { ph: 'YA_kX8hu1gg' })], submit: 'Get Short', run: get('/v1/ysa/shorts') },
+  { g: 'YouTube Scraper API', id: 'ysa-email', name: 'Channel contacts', desc: 'Public business emails and links from a channel description.', fields: [T('channel', 'Handle, id or link', { ph: '@MrBeast' })], submit: 'Find contacts', run: get('/v1/ysa/email') },
+  { g: 'YouTube Scraper API', id: 'ysa-status', name: 'Key status', desc: 'Whether the YouTube Scraper API key is loaded and usable. Costs no credits.', fields: [], submit: 'Check key', run: get('/v1/ysa/status') },
 ];
+
+/* keep each group together in the sidebar, in order of first appearance */
+(() => { const order = [...new Set(TOOLS.map(t => t.g))]; TOOLS.sort((a, b) => order.indexOf(a.g) - order.indexOf(b.g)); })();
 
 /* ---------- ui ---------- */
 let current;
@@ -738,9 +750,10 @@ const GROUP_INFO = {
   More: 'Lyrics, screenshots, cutouts, cards and fun', Cards: 'Welcome and goodbye cards for your community', Account: 'Your usage and downloader health',
   'Free media': 'NASA, Wikimedia Commons, Internet Archive, Pexels and Pixabay — keyless and licensed',
   YouTube: 'Search, inspect and download — self-hosted, no VDA key needed',
+  'YouTube Scraper API': 'Search, videos, transcripts, channels, playlists and comments as JSON',
   'Music info': 'Deezer + iTunes metadata, covers and 30-second previews',
 };
-const FEATURED = new Set(['Media', 'YouTube', 'Free media', 'AI', 'Music info', 'Business', 'Anime']);
+const FEATURED = new Set(['Media', 'YouTube', 'YouTube Scraper API', 'Free media', 'AI', 'Music info', 'Business', 'Anime']);
 const QUICK = [['dl', 'Download a video'], ['free-search', 'Find free media'], ['mi-search', 'Music metadata'], ['yt-engines', 'Check engines'], ['x-rmbg', 'Remove a background'], ['i-weather', 'Weather'], ['b-inv', 'Build an invoice'], ['a-rec', 'Anime recommendations'], ['desc', 'Write a product description'], ['qr', 'Make a QR code']];
 function home() {
   current = null;
@@ -777,10 +790,6 @@ function home() {
       el('div', { class: 'quick' }, QUICK.filter(([id]) => TOOLS.some(t => t.id === id)).map(([id, label]) => el('button', { type: 'button', onclick: () => open1(id) }, label)))),
     el('span', { html: MARK(176, 'mark heromark') }));
   
-  // --- Upgraded Pricing & Instant API Key Banner for #home ---
-  const currentKey = getKey();
-  const isAdminKey = currentKey.startsWith('lb_admin_unlimited');
-  const isTestKey = currentKey.startsWith('lb_test_');
 
   const onGetFreeKey = async () => {
     try {
@@ -804,98 +813,17 @@ function home() {
     }
   };
 
-  const onGetAdminKey = async () => {
-    const pw = prompt('Enter Admin Password (default: admin123):', 'admin123');
-    if (!pw) return;
-    try {
-      const res = await fetch('/v1/pricing/admin/key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: 'Ntando', password: pw })
-      });
-      const data = await res.json();
-      if (data.key) {
-        localStorage.setItem('ladybug_key', data.key);
-        $('#apikey').value = data.key;
-        toast('Admin Master Key (Unlimited Requests) unlocked & saved!', 'ok');
-        checkKey();
-        home();
-        navigator.clipboard.writeText(data.key);
-      } else {
-        toast('Admin login failed: ' + (data.detail || 'invalid password'), 'bad');
-      }
-    } catch (e) {
-      toast('Error claiming admin key: ' + e.message, 'bad');
-    }
-  };
+  const keyNow = getKey();
+  const strip = el('div', { class: 'keystrip' + (keyNow ? ' has' : '') },
+    keyNow
+      ? [el('span', { class: 'ks-dot' }), el('span', { class: 'ks-text' }, 'Key saved in this browser. Every tool below uses it.'),
+         el('a', { class: 'ks-link', href: '/pricing' }, 'Plans and limits')]
+      : [el('span', { class: 'ks-text' }, el('b', {}, 'No key yet?'), ' Get 50 free test requests, saved to this browser.'),
+         el('button', { class: 'ks-btn', type: 'button', onclick: onGetFreeKey }, 'Get a free key'),
+         el('a', { class: 'ks-link', href: '/pricing' }, 'See plans')]);
 
-  const pricingSection = el('div', { class: 'home-pricing-card' },
-    el('div', { class: 'home-pricing-head' },
-      el('div', {},
-        el('span', { class: 'home-pricing-badge' }, 'DEVELOPER PRICING & KEYS'),
-        el('h2', { style: 'margin:4px 0 6px;font-size:1.35rem' }, 'Start with 50 Free Test Requests · Scale to Unlimited Admin'),
-        el('p', { class: 'lede', style: 'margin:0;font-size:0.88rem' }, 'Test all media, bot dispatchers, and scrapers immediately with zero setup. Admin users unlock uncapped requests.')
-      ),
-      el('div', { class: 'home-pricing-key-box' },
-        el('div', { class: 'home-key-status' },
-          el('span', { class: 'home-tier-pill' + (isAdminKey ? ' admin' : isTestKey ? ' test' : '') }, isAdminKey ? 'ADMIN MASTER' : (isTestKey ? 'FREE TEST KEY' : 'ACTIVE KEY')),
-          el('span', { class: 'home-quota-text' }, isAdminKey ? '∞ Unlimited requests' : (currentKey ? '50 requests quota' : 'No key saved'))
-        ),
-        el('div', { class: 'home-key-row' },
-          el('code', { class: 'home-key-code', title: currentKey || 'Click button below to generate key' }, currentKey || 'Click "Get Free Test Key" below'),
-          currentKey ? cp('Copy', currentKey) : ''
-        )
-      )
-    ),
-    el('div', { class: 'home-pricing-grid' },
-      el('div', { class: 'home-plan-card free' },
-        el('div', { class: 'plan-name' }, 'Free Test Sandbox'),
-        el('div', { class: 'plan-price' }, '$0', el('span', {}, ' /forever')),
-        el('div', { class: 'plan-quota' }, '50 free test requests · 5 req/min'),
-        el('ul', {},
-          el('li', {}, 'Instant access to all 170+ endpoints'),
-          el('li', {}, 'Multi-device bot automation & scrapers'),
-          el('li', {}, 'Zero credit card required')
-        ),
-        el('button', { class: 'btn-primary-plan', type: 'button', onclick: onGetFreeKey }, '⚡ Get Free Test Key (50 Reqs)')
-      ),
-      el('div', { class: 'home-plan-card starter' },
-        el('div', { class: 'plan-name' }, 'Developer Starter'),
-        el('div', { class: 'plan-price' }, '$9', el('span', {}, ' /month')),
-        el('div', { class: 'plan-quota' }, '5,000 requests / month'),
-        el('ul', {},
-          el('li', {}, 'High concurrency limits'),
-          el('li', {}, 'Full web scraper with JS rendering'),
-          el('li', {}, 'Standard email support')
-        ),
-        el('a', { class: 'btn-ghost-plan', href: '/pricing' }, 'View Full Plans →')
-      ),
-      el('div', { class: 'home-plan-card pro' },
-        el('div', { class: 'plan-name' }, 'Developer Pro'),
-        el('div', { class: 'plan-price' }, '$29', el('span', {}, ' /month')),
-        el('div', { class: 'plan-quota' }, '25,000 requests / month'),
-        el('ul', {},
-          el('li', {}, 'Priority queues & low latency'),
-          el('li', {}, 'Webhooks & automatic retry queue'),
-          el('li', {}, 'Priority engineering support')
-        ),
-        el('a', { class: 'btn-ghost-plan', href: '/pricing' }, 'View Full Plans →')
-      ),
-      el('div', { class: 'home-plan-card admin' },
-        el('div', { class: 'plan-name' }, 'Admin Master'),
-        el('div', { class: 'plan-price' }, '∞ Unlimited', el('span', {}, ' /requests')),
-        el('div', { class: 'plan-quota' }, 'Zero rate limits · Unthrottled'),
-        el('ul', {},
-          el('li', {}, 'Uncapped throughput & zero 429 errors'),
-          el('li', {}, 'Master prefix: lb_admin_unlimited_*'),
-          el('li', {}, 'Full pricing editor & admin portal')
-        ),
-        el('button', { class: 'btn-admin-plan', type: 'button', onclick: onGetAdminKey }, '🛡 Unlock Admin Key (Unlimited)')
-      )
-    )
-  );
 
-  $('#tool').replaceChildren(el('div', { class: 'home' }, pricingSection, hero, body));
+  $('#tool').replaceChildren(el('div', { class: 'home' }, hero, strip, body));
 
   document.querySelectorAll('nav button').forEach(b => b.removeAttribute('aria-current'));
   if ($('#nav')._render) $('#nav')._render();
@@ -949,7 +877,7 @@ function open(id, preset = {}) {
       const node = kind === 'files' ? await R.files() : R[kind](data);
       out.replaceChildren(apiBox(CALLS.find(c => c.path.startsWith('/v1/') && !c.path.includes('/files/'))), node);
     } catch (err) {
-      out.replaceChildren(errBox(err.status === 401 ? 'API key rejected' : 'Something went wrong', err.status === 401 ? 'Check the key in the Render dashboard: your service > Environment > API_KEYS.' : err.message), apiBox(CALLS.find(c => c.path.startsWith('/v1/'))));
+      out.replaceChildren(errBox(err.status === 401 ? 'API key rejected' : 'Something went wrong', err.status === 401 ? 'Check the key in the box at the top and press Save.' : err.message), apiBox(CALLS.find(c => c.path.startsWith('/v1/'))));
     }
     btn.disabled = false; refreshUsage();
   });
@@ -992,7 +920,12 @@ function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   try { localStorage.setItem(THEME_KEY, t); } catch {}
   const b = $('#themebtn');
-  if (b) { b.textContent = t === 'dark' ? '☀' : '☾'; b.setAttribute('aria-pressed', String(t === 'dark')); }
+  if (b) {
+    b.innerHTML = t === 'dark'
+      ? '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>'
+      : '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+    b.setAttribute('aria-pressed', String(t === 'dark'));
+  }
 }
 applyTheme(document.documentElement.dataset.theme || 'light');
 $('#themebtn').addEventListener('click', () => {
@@ -1089,3 +1022,17 @@ $('#keyform').addEventListener('submit', e => {
 });
 buildNav(); open(location.hash.slice(1)); checkKey(); refreshUsage();
 window.addEventListener('hashchange', () => open(location.hash.slice(1)));
+
+/* ---------- live API status (real /health ping, no made-up numbers) ---------- */
+async function pingApi() {
+  const pill = $('#statuspill'), txt = $('#statustext');
+  if (!pill) return;
+  const t0 = performance.now();
+  try {
+    const r = await fetch('/health', { cache: 'no-store' });
+    if (!r.ok) throw new Error(String(r.status));
+    pill.dataset.state = 'ok'; txt.textContent = `Online · ${Math.round(performance.now() - t0)} ms`;
+  } catch { pill.dataset.state = 'bad'; txt.textContent = 'Unreachable'; }
+}
+$('#statuspill')?.addEventListener('click', pingApi);
+pingApi(); setInterval(pingApi, 60000);

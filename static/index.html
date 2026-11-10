@@ -8,7 +8,7 @@
 <title>Ladybug API</title>
 <link rel="icon" type="image/svg+xml" href="/ui/brand/favicon.svg">
 <link rel="apple-touch-icon" href="/ui/brand/apple-touch-icon.png">
-<meta name="theme-color" content="#F7F6F3">
+<meta name="theme-color" content="#EEF3EE">
 <meta property="og:title" content="Ladybug API">
 <meta property="og:description" content="One API for media, free licensed media, music metadata, images, AI, scraping, anime and business tools.">
 <meta property="og:image" content="/ui/brand/og-image.png">
@@ -25,8 +25,8 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/ui/style.css?v=2.5.0">
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ui/style.css?v=3.0.0">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><symbol id="lb-mark" viewBox="0 0 64 64">
@@ -39,9 +39,9 @@
 <path d="M18 22.5C18 13.5 24.5 9 32 9s14 4.5 14 13.5C42 20.5 37 19.6 32 19.6S22 20.5 18 22.5Z" style="fill:var(--mark-head,#14110F)"/>
 <g style="fill:var(--mark-eye,#fff)"><circle cx="26.2" cy="15.2" r="1.7"/><circle cx="37.8" cy="15.2" r="1.7"/></g></symbol></svg>
 <header class="top">
-  <button class="iconbtn navtoggle" id="navtoggle" type="button" aria-label="Open tools menu" aria-expanded="false">&#9776;</button>
+  <button class="iconbtn navtoggle" id="navtoggle" type="button" aria-label="Open tools menu" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
   <a class="brand" href="#home" aria-label="Ladybug home">
-    <svg class="mark" width="34" height="34" aria-hidden="true"><use href="#lb-mark"/></svg>
+    <svg class="mark" width="32" height="32" aria-hidden="true"><use href="#lb-mark"/></svg>
     <span class="word">ladybug</span>
   </a>
   <button class="searchbtn" id="palettebtn" type="button" aria-label="Search tools (Ctrl+K)">
@@ -52,11 +52,14 @@
   <form class="key" id="keyform" autocomplete="off" action="javascript:void(0)">
     <label for="apikey">API key</label>
     <input id="apikey" type="text" name="ladybug-key" autocomplete="off" autocapitalize="off" data-lpignore="true" data-1p-ignore placeholder="Paste your key" spellcheck="false">
-    <button type="submit" class="ghost" id="keybtn">Save</button><a href="/pricing" class="ghost" style="text-decoration:none;font-weight:600;color:var(--red,#D62839)" title="Get 50 free test requests or unlimited admin key">Pricing</a>
+    <button type="submit" class="ghost" id="keybtn">Save</button>
     <span id="keystate" class="keystate" role="status"></span>
   </form>
-  <a class="docs" href="/pricing" style="color:var(--red,#D62839);font-weight:700;margin-right:4px">Pricing & Free Keys</a><button class="iconbtn" id="themebtn" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">&#9790;</button>
-  <a class="docs" href="/docs" target="_blank" rel="noopener">API docs</a>
+  <div class="toplinks">
+    <a class="docs" href="/pricing">Pricing</a>
+    <a class="docs" href="/docs" target="_blank" rel="noopener">API docs</a>
+  </div>
+  <button class="iconbtn" id="themebtn" type="button" aria-label="Toggle dark mode" title="Toggle dark mode"></button>
 </header>
 <div class="shell">
   <nav id="nav" aria-label="Tools"></nav>
@@ -65,15 +68,9 @@
   </main>
 </div>
 <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
-<script src="/ui/app.js?v=2.6.0"></script>
-
-<div class="pr-corner-uptime" id="cornerUptime" title="Click to ping cluster" style="position:fixed;bottom:16px;left:16px;z-index:100;display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:9999px;background:var(--card);border:1px solid var(--line2);box-shadow:var(--shadow-lg);font-size:0.75rem;color:var(--ink);cursor:pointer;backdrop-filter:blur(8px);user-select:none">
-  <span style="width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2px rgba(29,122,75,0.25);animation:pulse-dot 2s infinite ease-in-out"></span>
-  <span style="color:var(--ink2);font-weight:500">API Uptime:</span>
-  <strong style="color:var(--ok);font-family:var(--mono);font-weight:700">99.98%</strong>
-  <span style="color:var(--ink3)">·</span>
-  <span id="cornerLatency" style="font-family:var(--mono);color:var(--ink3)">18ms</span>
-</div>
+<!-- status pill must exist before app.js runs -->
+<button class="status-pill" id="statuspill" type="button" title="Click to check the API again"><span class="sp-dot"></span><span id="statustext">Checking…</span></button>
+<script src="/ui/app.js?v=3.0.0"></script>
 
 </body>
 </html>
