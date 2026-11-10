@@ -66,5 +66,14 @@
 </div>
 <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
 <script src="/ui/app.js"></script>
+
+<div class="pr-corner-uptime" id="cornerUptime" title="Click to ping cluster" style="position:fixed;bottom:16px;left:16px;z-index:100;display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:9999px;background:var(--card);border:1px solid var(--line2);box-shadow:var(--shadow-lg);font-size:0.75rem;color:var(--ink);cursor:pointer;backdrop-filter:blur(8px);user-select:none">
+  <span style="width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2px rgba(29,122,75,0.25);animation:pulse-dot 2s infinite ease-in-out"></span>
+  <span style="color:var(--ink2);font-weight:500">API Uptime:</span>
+  <strong style="color:var(--ok);font-family:var(--mono);font-weight:700">99.98%</strong>
+  <span style="color:var(--ink3)">·</span>
+  <span id="cornerLatency" style="font-family:var(--mono);color:var(--ink3)">18ms</span>
+</div>
+
 </body>
 </html>

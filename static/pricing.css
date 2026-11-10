@@ -605,3 +605,60 @@
 .pr-foot-links a:hover {
   color: var(--red);
 }
+
+/* Corner API Uptime Widget */
+.pr-corner-uptime {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  background: var(--card);
+  border: 1px solid var(--line2);
+  box-shadow: var(--shadow-lg);
+  font-size: 0.75rem;
+  color: var(--ink);
+  backdrop-filter: blur(8px);
+  user-select: none;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.pr-corner-uptime:hover {
+  transform: translateY(-1px);
+  border-color: var(--ok);
+}
+
+.pr-dot-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 2px rgba(29, 122, 75, 0.25);
+  animation: pulse-dot 2s infinite ease-in-out;
+}
+
+@keyframes pulse-dot {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.pr-uptime-label {
+  color: var(--ink2);
+  font-weight: 500;
+}
+
+.pr-uptime-val {
+  color: var(--ok);
+  font-family: var(--mono);
+  font-weight: 700;
+}
+
+.pr-latency-val {
+  font-family: var(--mono);
+  color: var(--ink3);
+}
