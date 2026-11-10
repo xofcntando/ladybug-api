@@ -25,6 +25,7 @@ function row(p = {}) {
   const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'pr-btn pr-ghost'; rm.textContent = 'Remove'; rm.onclick = () => d.remove(); d.append(rm);
   return d;
 }
+
 function collect() {
   return { currency: ($('cur').value || 'USD').toUpperCase(), plans: [...$('rows').children].map(d => {
     const v = k => d.querySelector(`[data-k=${k}]`);
@@ -33,20 +34,49 @@ function collect() {
       features: v('features').value.split('\n').map(s => s.trim()).filter(Boolean) };
   }) };
 }
+
 async function openEditor(u) {
   $('login').hidden = true; $('editor').hidden = false; $('who').textContent = 'Signed in as ' + u;
   const d = await fetch('/v1/pricing').then(r => r.json());
   $('cur').value = d.currency; $('rows').textContent = ''; d.plans.forEach(p => $('rows').append(row(p)));
 }
+
 $('login').onsubmit = async e => {
   e.preventDefault(); $('lerr').textContent = '';
   try { const r = await j('/v1/pricing/admin/login', { method: 'POST', body: JSON.stringify({ username: $('u').value, password: $('p').value }) }); $('p').value = ''; openEditor(r.user); }
   catch (err) { $('lerr').textContent = err.message; }
 };
+
 $('out').onclick = async () => { await j('/v1/pricing/admin/logout', { method: 'POST' }); location.reload(); };
 $('add').onclick = () => $('rows').append(row());
 $('save').onclick = async () => {
   try { const r = await j('/v1/pricing/admin/plans', { method: 'PUT', body: JSON.stringify(collect()) }); msg('Saved ' + r.plans + ' plans. Public page updates within a minute.'); }
   catch (err) { msg(err.message, true); }
 };
+
+const genBtn = $('genAdminKeyBtn');
+if (genBtn) {
+  genBtn.onclick = async () => {
+    try {
+      const r = await j('/v1/pricing/admin/key', { method: 'POST' });
+      $('adminKeyCode').textContent = r.key;
+      navigator.clipboard.writeText(r.key);
+      msg('Generated Unlimited Admin Key and copied to clipboard!', false);
+    } catch (err) {
+      msg(err.message, true);
+    }
+  };
+}
+
+const copyBtn = $('copyAdminKeyBtn');
+if (copyBtn) {
+  copyBtn.onclick = () => {
+    const k = $('adminKeyCode').textContent;
+    if (k && k !== 'Click Generate') {
+      navigator.clipboard.writeText(k);
+      msg('Copied admin key to clipboard!', false);
+    }
+  };
+}
+
 j('/v1/pricing/admin/me').then(r => openEditor(r.user)).catch(() => { $('login').hidden = false; });

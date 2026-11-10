@@ -1,41 +1,423 @@
 <!doctype html>
 <html lang="en" data-theme="light">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light dark">
-<title>Pricing - Ladybug API</title>
-<link rel="icon" type="image/svg+xml" href="/ui/brand/favicon.svg">
-<script>(function(){try{var t=localStorage.getItem("lb_theme");if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t}catch(e){}})();</script>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/ui/style.css">
-<link rel="stylesheet" href="/ui/pricing.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Pricing & API Keys — Ladybug API</title>
+  <link rel="icon" type="image/svg+xml" href="/ui/brand/favicon.svg">
+  <script>
+    (function(){
+      try{
+        var t=localStorage.getItem("lb_theme");
+        if(!t)t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";
+        document.documentElement.dataset.theme=t;
+      }catch(e){}
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/ui/style.css">
+  <link rel="stylesheet" href="/ui/pricing.css">
 </head>
 <body>
-<main class="pr-wrap">
-  <header class="pr-head">
-    <a class="pr-brand" href="/"><img src="/ui/brand/mark.svg" alt="" width="28" height="28"> Ladybug API</a>
-    <h1>Simple pricing</h1>
-    <p id="sub">One API for media, images, AI, scraping and business tools.</p>
+  <header class="pr-top-nav">
+    <div class="pr-nav-inner">
+      <a class="pr-brand" href="/">
+        <img src="/ui/brand/mark.svg" alt="Ladybug logo" width="30" height="30">
+        <span>Ladybug API</span>
+      </a>
+      <nav class="pr-nav-links">
+        <a href="/" class="pr-nav-link">Console</a>
+        <a href="/pricing" class="pr-nav-link active">Pricing & Keys</a>
+        <a href="/pricing-admin" class="pr-nav-link">Admin Editor</a>
+        <a href="/docs" target="_blank" rel="noopener" class="pr-nav-link">API Docs ↗</a>
+      </nav>
+      <div class="pr-nav-actions">
+        <button class="iconbtn" id="themebtn" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">&#9790;</button>
+        <button class="pr-btn pr-btn-primary" id="quickFreeKeyBtn" type="button">Get Free Test Key</button>
+      </div>
+    </div>
   </header>
-  <section id="plans" class="pr-grid" aria-live="polite"><p class="pr-muted">Loading plans...</p></section>
-  <p class="pr-foot pr-muted">Quotas reset monthly. Need more? Ask about custom limits.</p>
-</main>
-<script>
-const fmt = (n, c) => n === 0 ? 'Free' : new Intl.NumberFormat('en', { style: 'currency', currency: c, maximumFractionDigits: n % 1 ? 2 : 0 }).format(n);
-fetch('/v1/pricing').then(r => r.json()).then(d => {
-  const el = document.getElementById('plans'); el.textContent = '';
-  d.plans.forEach(p => {
-    const card = document.createElement('article'); card.className = 'pr-card' + (p.highlight ? ' pr-hi' : '');
-    const h = document.createElement('h2'); h.textContent = p.name;
-    const price = document.createElement('div'); price.className = 'pr-price';
-    price.textContent = fmt(p.price_monthly, d.currency);
-    if (p.price_monthly > 0) { const s = document.createElement('span'); s.textContent = ' /month'; price.append(s); }
-    const q = document.createElement('div'); q.className = 'pr-quota'; q.textContent = p.requests_per_month.toLocaleString('en') + ' requests / month';
-    const ul = document.createElement('ul'); (p.features || []).forEach(f => { const li = document.createElement('li'); li.textContent = f; ul.append(li); });
-    card.append(h, price, q, ul); el.append(card);
-  });
-}).catch(() => { document.getElementById('plans').textContent = 'Could not load pricing.'; });
-</script>
-</body></html>
+
+  <main class="pr-wrap">
+    <section class="pr-hero">
+      <div class="pr-tag">DEVELOPER SANDBOX & QUOTAS</div>
+      <h1>Simple, Transparent Pricing</h1>
+      <p class="pr-lead">One API for media, bot automation, scraping, AI, and business workflows. Start with 50 free test requests, or unlock unlimited administrative throughput.</p>
+    </section>
+
+    <!-- Active Key Banner -->
+    <div class="pr-key-banner" id="keyBanner">
+      <div class="pr-key-info">
+        <div class="pr-key-label-row">
+          <span class="pr-key-tier-badge" id="keyTierBadge">TEST KEY</span>
+          <span class="pr-key-subtext" id="keySubtext">50 requests included</span>
+        </div>
+        <div class="pr-key-display-row">
+          <code class="pr-key-code" id="activeKeyCode">Generating or paste your key...</code>
+          <button class="pr-btn pr-btn-sm" id="copyKeyBtn" type="button">Copy</button>
+        </div>
+      </div>
+      <div class="pr-key-actions">
+        <button class="pr-btn pr-btn-accent" id="getFreeKeyBtn" type="button">Generate Free Test Key</button>
+        <button class="pr-btn pr-btn-ghost" id="getAdminKeyBtn" type="button">Admin Unlimited Key</button>
+      </div>
+    </div>
+
+    <!-- Pricing Cards Grid -->
+    <section id="plans" class="pr-grid" aria-live="polite">
+      <p class="pr-muted">Loading pricing tiers...</p>
+    </section>
+
+    <!-- Interactive Live Test Console -->
+    <section class="pr-tester-section">
+      <div class="pr-tester-head">
+        <div>
+          <h2>Interactive API Playground</h2>
+          <p class="pr-muted">Test your active key in real time against live endpoints.</p>
+        </div>
+        <div class="pr-tester-status">
+          <span class="pr-dot"></span> Server Online: <code>/v1/pricing</code>
+        </div>
+      </div>
+
+      <div class="pr-tester-card">
+        <div class="pr-tester-controls">
+          <div class="pr-control-group">
+            <label for="testEndpoint">Endpoint</label>
+            <select id="testEndpoint" class="pr-select">
+              <option value="/v1/pricing">GET /v1/pricing (Public Plans)</option>
+              <option value="/v1/account/usage">GET /v1/account/usage (Key Quota Status)</option>
+              <option value="/v1/info/time">GET /v1/info/time (World Clock)</option>
+              <option value="/v1/info/crypto">GET /v1/info/crypto (Live Crypto Rates)</option>
+            </select>
+          </div>
+          <button class="pr-btn pr-btn-primary" id="runTestBtn" type="button">Send Test Request</button>
+        </div>
+
+        <div class="pr-tester-cli">
+          <span class="pr-muted">cURL snippet:</span>
+          <code id="curlSnippet">curl -H "X-API-Key: YOUR_KEY" https://.../v1/pricing</code>
+        </div>
+
+        <div class="pr-tester-result" id="testResultBox">
+          <div class="pr-res-meta">
+            <span class="pr-status-badge" id="resStatus">Ready</span>
+            <span class="pr-res-time" id="resTime">—</span>
+            <span class="pr-res-quota" id="resQuota">—</span>
+          </div>
+          <pre class="pr-res-code" id="resCode">// Output will appear here upon executing test request...</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Admin Key Modal / Prompt -->
+    <div class="pr-modal-overlay" id="adminModal" hidden>
+      <div class="pr-modal">
+        <div class="pr-modal-header">
+          <h3>Claim Admin Unlimited Key</h3>
+          <button type="button" class="pr-close-btn" id="closeAdminModal">&times;</button>
+        </div>
+        <p class="pr-muted">Admin keys have zero rate limits and unlimited request volume.</p>
+        <form id="adminKeyForm" class="pr-form">
+          <label>Admin Username
+            <input id="adminUser" type="text" placeholder="Ntando" required autocomplete="username">
+          </label>
+          <label>Admin Password
+            <input id="adminPass" type="password" placeholder="Password" required autocomplete="current-password">
+          </label>
+          <div class="pr-modal-actions">
+            <button type="button" class="pr-btn pr-btn-ghost" id="cancelAdminModal">Cancel</button>
+            <button type="submit" class="pr-btn pr-btn-primary">Unlock Unlimited Key</button>
+          </div>
+        </form>
+        <div id="adminModalMsg" class="pr-err" role="alert"></div>
+      </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="pr-toasts" id="toastContainer"></div>
+  </main>
+
+  <footer class="pr-foot-wrap">
+    <div class="pr-foot-inner">
+      <span>© 2026 Ladybug API. High-Performance Multi-Device Gateway.</span>
+      <div class="pr-foot-links">
+        <a href="/">Console</a>
+        <a href="/pricing">Pricing</a>
+        <a href="/pricing-admin">Admin</a>
+        <a href="https://github.com/xofcntando/ladybug-api" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    (function(){
+      // Theme switcher
+      var themebtn = document.getElementById('themebtn');
+      if (themebtn) {
+        themebtn.addEventListener('click', function(){
+          var cur = document.documentElement.dataset.theme;
+          var next = cur === 'dark' ? 'light' : 'dark';
+          document.documentElement.dataset.theme = next;
+          try { localStorage.setItem('lb_theme', next); } catch(e){}
+        });
+      }
+
+      function showToast(msg, isSuccess) {
+        var container = document.getElementById('toastContainer');
+        var toast = document.createElement('div');
+        toast.className = 'pr-toast' + (isSuccess ? ' pr-toast-ok' : '');
+        toast.textContent = msg;
+        container.appendChild(toast);
+        setTimeout(function(){ toast.classList.add('fade-out'); setTimeout(function(){ toast.remove(); }, 300); }, 3000);
+      }
+
+      var activeKey = localStorage.getItem('ladybug-key') || '';
+      var activeKeyTier = localStorage.getItem('lb_key_tier') || (activeKey.startsWith('lb_admin') ? 'admin' : (activeKey.startsWith('lb_test') ? 'free_test' : ''));
+
+      function updateKeyDisplay() {
+        var codeEl = document.getElementById('activeKeyCode');
+        var badgeEl = document.getElementById('keyTierBadge');
+        var subtextEl = document.getElementById('keySubtext');
+        if (!activeKey) {
+          codeEl.textContent = 'No key set — click "Generate Free Test Key"';
+          badgeEl.textContent = 'NO KEY';
+          badgeEl.className = 'pr-key-tier-badge';
+          subtextEl.textContent = '50 free test requests available';
+        } else if (activeKey.startsWith('lb_admin_unlimited')) {
+          codeEl.textContent = activeKey;
+          badgeEl.textContent = 'ADMIN UNLIMITED';
+          badgeEl.className = 'pr-key-tier-badge pr-badge-admin';
+          subtextEl.textContent = '∞ Unlimited requests · Unthrottled';
+        } else {
+          codeEl.textContent = activeKey;
+          badgeEl.textContent = 'FREE TEST KEY';
+          badgeEl.className = 'pr-key-tier-badge pr-badge-test';
+          subtextEl.textContent = '50 test requests included';
+        }
+        updateCurlSnippet();
+      }
+
+      function updateCurlSnippet() {
+        var ep = document.getElementById('testEndpoint').value;
+        var k = activeKey || 'YOUR_API_KEY';
+        var snip = document.getElementById('curlSnippet');
+        snip.textContent = 'curl -H "X-API-Key: ' + k + '" ' + window.location.origin + ep;
+      }
+
+      document.getElementById('copyKeyBtn').addEventListener('click', function(){
+        if (!activeKey) return;
+        navigator.clipboard.writeText(activeKey).then(function(){
+          showToast('API key copied to clipboard!', true);
+        });
+      });
+
+      // Free Test Key Request
+      function fetchFreeKey() {
+        fetch('/v1/pricing/free-key', { method: 'POST' })
+          .then(function(r){ return r.json(); })
+          .then(function(data){
+            if (data.key) {
+              activeKey = data.key;
+              localStorage.setItem('ladybug-key', activeKey);
+              localStorage.setItem('lb_key_tier', 'free_test');
+              updateKeyDisplay();
+              navigator.clipboard.writeText(activeKey);
+              showToast('Free Test Key generated (50 requests) & copied to clipboard!', true);
+            }
+          })
+          .catch(function(err){
+            // Fallback key generation if offline
+            var k = 'lb_test_' + Math.random().toString(36).substring(2, 10);
+            activeKey = k;
+            localStorage.setItem('ladybug-key', k);
+            updateKeyDisplay();
+            showToast('Free Test Key activated: ' + k, true);
+          });
+      }
+
+      document.getElementById('getFreeKeyBtn').addEventListener('click', fetchFreeKey);
+      document.getElementById('quickFreeKeyBtn').addEventListener('click', fetchFreeKey);
+
+      // Admin key modal handlers
+      var adminModal = document.getElementById('adminModal');
+      document.getElementById('getAdminKeyBtn').addEventListener('click', function(){
+        adminModal.hidden = false;
+      });
+      document.getElementById('closeAdminModal').addEventListener('click', function(){
+        adminModal.hidden = true;
+      });
+      document.getElementById('cancelAdminModal').addEventListener('click', function(){
+        adminModal.hidden = true;
+      });
+
+      document.getElementById('adminKeyForm').addEventListener('submit', function(e){
+        e.preventDefault();
+        var u = document.getElementById('adminUser').value;
+        var p = document.getElementById('adminPass').value;
+        var msg = document.getElementById('adminModalMsg');
+        msg.textContent = 'Authenticating...';
+
+        fetch('/v1/pricing/admin/key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u, password: p })
+        })
+        .then(function(r){
+          if (!r.ok) throw new Error('Invalid admin credentials');
+          return r.json();
+        })
+        .then(function(data){
+          if (data.key) {
+            activeKey = data.key;
+            localStorage.setItem('ladybug-key', activeKey);
+            localStorage.setItem('lb_key_tier', 'admin');
+            updateKeyDisplay();
+            adminModal.hidden = true;
+            msg.textContent = '';
+            navigator.clipboard.writeText(activeKey);
+            showToast('Admin Master Key (Unlimited Requests) unlocked & copied!', true);
+          }
+        })
+        .catch(function(err){
+          msg.textContent = err.message || 'Login failed';
+        });
+      });
+
+      // Load pricing cards from /v1/pricing
+      var fmt = function(n, c) {
+        return n === 0 ? 'Free' : new Intl.NumberFormat('en', { style: 'currency', currency: c, maximumFractionDigits: n % 1 ? 2 : 0 }).format(n);
+      };
+
+      fetch('/v1/pricing')
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          var el = document.getElementById('plans');
+          el.textContent = '';
+
+          var plans = d.plans || [];
+          // Ensure Admin plan is visible in comparison
+          var hasAdmin = plans.some(function(p){ return p.id === 'admin'; });
+          if (!hasAdmin) {
+            plans.push({
+              id: 'admin',
+              name: 'Admin Master',
+              price_monthly: 0,
+              requests_per_month: 0,
+              highlight: false,
+              isAdmin: true,
+              features: ['∞ Unlimited requests', 'Zero rate limits', 'Master control portal', 'Bypass all IP throttling']
+            });
+          }
+
+          plans.forEach(function(p){
+            var card = document.createElement('article');
+            card.className = 'pr-card' + (p.highlight ? ' pr-hi' : '') + (p.isAdmin ? ' pr-admin-card' : '');
+
+            var h = document.createElement('h2');
+            h.textContent = p.name;
+
+            var price = document.createElement('div');
+            price.className = 'pr-price';
+            if (p.isAdmin) {
+              price.innerHTML = '<span class="pr-unlimited-txt">∞ Unlimited</span>';
+            } else {
+              price.textContent = fmt(p.price_monthly, d.currency);
+              if (p.price_monthly > 0) {
+                var s = document.createElement('span');
+                s.textContent = ' /month';
+                price.append(s);
+              }
+            }
+
+            var q = document.createElement('div');
+            q.className = 'pr-quota';
+            q.textContent = p.isAdmin ? 'Zero quota caps' : (p.requests_per_month ? p.requests_per_month.toLocaleString('en') + ' requests / month' : '50 free test requests');
+
+            var ul = document.createElement('ul');
+            (p.features || []).forEach(function(f){
+              var li = document.createElement('li');
+              li.textContent = f;
+              ul.append(li);
+            });
+
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            if (p.id === 'free') {
+              btn.className = 'pr-btn pr-btn-primary pr-card-cta';
+              btn.textContent = 'Get Free Test Key';
+              btn.onclick = fetchFreeKey;
+            } else if (p.isAdmin) {
+              btn.className = 'pr-btn pr-btn-accent pr-card-cta';
+              btn.textContent = 'Claim Admin Key';
+              btn.onclick = function(){ adminModal.hidden = false; };
+            } else {
+              btn.className = 'pr-btn pr-btn-ghost pr-card-cta';
+              btn.textContent = 'Upgrade to ' + p.name;
+              btn.onclick = function(){ showToast('Contact support or admin to subscribe to ' + p.name, false); };
+            }
+
+            card.append(h, price, q, ul, btn);
+            el.append(card);
+          });
+        })
+        .catch(function(){
+          document.getElementById('plans').textContent = 'Could not load pricing.';
+        });
+
+      // API Test Runner
+      document.getElementById('testEndpoint').addEventListener('change', updateCurlSnippet);
+      document.getElementById('runTestBtn').addEventListener('click', function(){
+        var ep = document.getElementById('testEndpoint').value;
+        var btn = document.getElementById('runTestBtn');
+        var resCode = document.getElementById('resCode');
+        var resStatus = document.getElementById('resStatus');
+        var resTime = document.getElementById('resTime');
+        var resQuota = document.getElementById('resQuota');
+
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+        resStatus.textContent = 'Requesting...';
+        resStatus.className = 'pr-status-badge';
+
+        var t0 = performance.now();
+        var headers = {};
+        if (activeKey) {
+          headers['X-API-Key'] = activeKey;
+        }
+
+        fetch(ep, { headers: headers })
+          .then(function(r){
+            var latency = Math.round(performance.now() - t0);
+            resTime.textContent = latency + 'ms';
+            resStatus.textContent = r.status + ' ' + r.statusText;
+            resStatus.className = 'pr-status-badge ' + (r.ok ? 'pr-status-ok' : (r.status === 429 ? 'pr-status-warn' : 'pr-status-err'));
+
+            var quotaRemaining = r.headers.get('X-RateLimit-Remaining');
+            resQuota.textContent = quotaRemaining ? 'Quota left: ' + quotaRemaining : '';
+
+            return r.json();
+          })
+          .then(function(data){
+            resCode.textContent = JSON.stringify(data, null, 2);
+          })
+          .catch(function(err){
+            resStatus.textContent = 'Failed';
+            resStatus.className = 'pr-status-badge pr-status-err';
+            resCode.textContent = '// Error executing request: ' + err.message;
+          })
+          .finally(function(){
+            btn.disabled = false;
+            btn.textContent = 'Send Test Request';
+          });
+      });
+
+      // Initial render
+      updateKeyDisplay();
+    })();
+  </script>
+</body>
+</html>

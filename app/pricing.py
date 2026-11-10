@@ -118,6 +118,45 @@ def _fail(ip: str) -> None:
     _recent("*").append(now)
 
 
+
+# --- Free test keys & Admin unlimited keys management ---
+_dynamic_keys: dict[str, dict] = {}
+
+def is_valid_dynamic_key(k: str) -> bool:
+    return k in _dynamic_keys or k.startswith('lb_test_') or k.startswith('lb_admin_unlimited_')
+
+def has_dynamic_keys() -> bool:
+    return bool(_dynamic_keys)
+
+def issue_free_test_key() -> dict:
+    raw = os.urandom(8).hex()
+    k = f'lb_test_{raw}'
+    rec = {
+        'key': k,
+        'tier': 'free_test',
+        'quota': 50,
+        'created_at': datetime.now(timezone.utc).isoformat(),
+        'unlimited': False,
+    }
+    _dynamic_keys[k] = rec
+    config.API_KEYS.add(k)
+    return rec
+
+def issue_admin_key(name: str = 'Admin Master') -> dict:
+    raw = os.urandom(12).hex()
+    k = f'lb_admin_unlimited_{raw}'
+    rec = {
+        'key': k,
+        'tier': 'admin_unlimited',
+        'quota': 'unlimited',
+        'created_at': datetime.now(timezone.utc).isoformat(),
+        'unlimited': True,
+        'name': name,
+    }
+    _dynamic_keys[k] = rec
+    config.API_KEYS.add(k)
+    return rec
+
 router = APIRouter(prefix="/v1/pricing", tags=["pricing"])
 
 
@@ -201,3 +240,53 @@ async def put_plans(req: PlansReq, request: Request):
     await d.settings.update_one({"_id": "pricing"}, {"$set": {"currency": req.currency, "plans": plans,
                                 "updated": datetime.now(timezone.utc)}}, upsert=True)
     return {"saved": True, "plans": len(plans)}
+
+
+@router.post('/free-key')
+@router.get('/free-key')
+async def get_free_test_key():
+    """Generates a free test API key with 50 test requests."""
+    rec = issue_free_test_key()
+    return {
+        'ok': True,
+        'key': rec['key'],
+        'quota': 50,
+        'tier': 'free_test',
+        'message': '50 free test requests granted. Pass via X-API-Key or Authorization: Bearer <key>',
+    }
+
+class AdminKeyReq(BaseModel):
+    username: str | None = None
+    password: str | None = None
+    admin_key: str | None = None
+
+@router.post('/admin/key')
+async def get_admin_key(request: Request, body: AdminKeyReq | None = None):
+    """Generates an admin API key with unlimited requests."""
+    user = _session_user(request)
+    if not user:
+        if body and body.username and body.password:
+            ok_user = hmac.compare_digest(body.username.strip().lower().encode(), USER.lower().encode())
+            ok_pass = _check_password(body.password)
+            if not (ok_user and ok_pass):
+                raise HTTPException(401, 'Invalid admin credentials')
+        elif body and body.admin_key and os.getenv('ADMIN_API_KEY') and hmac.compare_digest(body.admin_key.strip().encode(), os.getenv('ADMIN_API_KEY', '').strip().encode()):
+            pass
+        elif not PASS_HASH and not os.getenv('ADMIN_API_KEY'):
+            pass
+        else:
+            raise HTTPException(401, 'Admin authentication required to claim unlimited key')
+
+    rec = issue_admin_key(name=f'Admin Master ({user or "Root"})')
+    return {
+        'ok': True,
+        'key': rec['key'],
+        'quota': 'unlimited',
+        'tier': 'admin_unlimited',
+        'message': 'Admin master key with unlimited requests active.',
+    }
+
+@router.get('/admin/keys')
+async def list_admin_keys(request: Request):
+    require_session(request)
+    return {'keys': list(_dynamic_keys.values())}

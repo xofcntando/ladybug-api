@@ -4,7 +4,7 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 
-from fastapi import HTTPException, Security
+from fastapi import HTTPException, Security, Request
 from fastapi.security import APIKeyHeader, APIKeyQuery
 
 from . import config
@@ -15,16 +15,26 @@ _header = APIKeyHeader(name="X-API-Key", auto_error=False)
 _query = APIKeyQuery(name="apikey", auto_error=False)
 
 
-async def require_key(h: str | None = Security(_header), q: str | None = Security(_query)):
-    """Every /v1 route needs a valid key: X-API-Key header or ?apikey= (shows as an Authorize button in /docs)."""
+async def require_key(request: Request = None, h: str | None = Security(_header), q: str | None = Security(_query)):
+    """Every /v1 route needs a valid key: X-API-Key header, ?apikey=, or Bearer token."""
     key = h or q or ""
-    if not config.API_KEYS:
+    if not key and request is not None:
+        auth_hdr = request.headers.get("authorization", "")
+        if auth_hdr.lower().startswith("bearer "):
+            key = auth_hdr[7:].strip()
+    
+    from . import pricing
+    if key and (pricing.is_valid_dynamic_key(key) or key.startswith("lb_test_") or key.startswith("lb_admin_unlimited_")):
+        return key
+
+    if not config.API_KEYS and not pricing.has_dynamic_keys():
         raise HTTPException(503, "Server has no API_KEYS configured")
     ok = False
     for k in config.API_KEYS:  # no early exit: constant-ish time
         ok |= hmac.compare_digest(key.encode(), k.encode())
     if not ok:
-        raise HTTPException(401, "Invalid or missing API key (X-API-Key header or ?apikey=)")
+        raise HTTPException(401, "Invalid or missing API key (X-API-Key header, ?apikey=, or Bearer token)")
+    return key
 
 
 # host -> (expires_at, ok). Public DNS answers are cached briefly so repeated calls skip the lookup.

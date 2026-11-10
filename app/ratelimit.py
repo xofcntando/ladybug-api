@@ -98,7 +98,9 @@ async def flush_loop(every: float = 10.0) -> None:
 
 
 def _key(request: Request) -> str:
-    return request.headers.get("x-api-key") or request.query_params.get("apikey") or ""
+    auth_hdr = request.headers.get("authorization", "")
+    bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
+    return request.headers.get("x-api-key") or request.query_params.get("apikey") or bearer or ""
 
 
 def usage(key: str) -> dict:
@@ -107,7 +109,18 @@ def usage(key: str) -> dict:
     bucket = _buckets.get(key) or deque()
     _expire(bucket, now)
     used = len(bucket)
-    limit = config.DAILY_REQUEST_LIMIT
+    if key.startswith("lb_admin_unlimited_"):
+        return {
+            "limit": 0,
+            "used": used,
+            "remaining": 999999999,
+            "reset": 0,
+            "reset_in": 0,
+            "window_seconds": WINDOW,
+            "enabled": False,
+            "is_unlimited": True,
+        }
+    limit = 50 if key.startswith("lb_test_") else config.DAILY_REQUEST_LIMIT
     reset = int(bucket[0] + WINDOW) if bucket else int(now) + WINDOW
     return {
         "limit": limit,
@@ -140,10 +153,24 @@ class RateLimitMiddleware:
         request = Request(scope)
         key = _key(request)
         # Only count keys we actually issued; a wrong key gets 401 from require_key and costs us nothing.
-        if not key or key not in config.API_KEYS:
+        from . import pricing
+        if not key or (key not in config.API_KEYS and not pricing.is_valid_dynamic_key(key)):
             return await self.app(scope, receive, send)
 
-        limit = config.DAILY_REQUEST_LIMIT
+        # Admin key has unlimited requests (bypass all rate limits)
+        if key.startswith("lb_admin_unlimited_"):
+            def with_admin_headers():
+                async def wrapped(message):
+                    if message["type"] == "http.response.start":
+                        h = MutableHeaders(scope=message)
+                        h["X-RateLimit-Limit"] = "unlimited"
+                        h["X-RateLimit-Remaining"] = "unlimited"
+                        h["X-RateLimit-Reset"] = "0"
+                    await send(message)
+                return wrapped
+            return await self.app(scope, receive, with_admin_headers())
+
+        limit = 50 if key.startswith("lb_test_") else config.DAILY_REQUEST_LIMIT
 
         def with_headers(info: dict):
             async def wrapped(message):

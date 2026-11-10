@@ -25,6 +25,15 @@
   </form>
 
   <section id="editor" hidden>
+        <div class="pr-key-box" style="margin:20px 0;padding:16px;background:var(--code);border:1px solid var(--line);border-radius:8px">
+      <h3 style="margin:0 0 6px;font-size:1rem;color:var(--ink)">Admin Master Key (Unlimited Requests)</h3>
+      <p style="margin:0 0 12px;font-size:0.8rem;color:var(--ink2)">Generate an uncapped master token with zero rate limiting.</p>
+      <div style="display:flex;gap:8px;align-items:center">
+        <code id="adminKeyCode" style="padding:6px 10px;background:var(--card);border:1px solid var(--line);border-radius:4px;flex-grow:1;font-size:0.8rem">Click Generate</code>
+        <button id="genAdminKeyBtn" class="pr-btn pr-btn-primary" type="button">Issue Admin Key</button>
+        <button id="copyAdminKeyBtn" class="pr-btn pr-ghost" type="button">Copy</button>
+      </div>
+    </div>
     <div class="pr-bar"><span id="who" class="pr-muted"></span><button id="out" class="pr-btn pr-ghost" type="button">Log out</button></div>
     <label class="pr-cur">Currency <input id="cur" maxlength="3" value="USD"></label>
     <div id="rows"></div>
