@@ -22,6 +22,8 @@ All under `/v1` need `X-API-Key`. Full interactive list at `/docs`.
 | Web check | `GET /web/status`, `/web/headers`, `/web/robots`, `/web/ssl` |
 | Jobs | `GET /jobs/sources`, `/jobs/search?q=&source=all|remotive|arbeitnow|remoteok|jobicy|themuse|himalayas&location=&remote=&job_type=&category=&level=&min_salary=&days=&limit=&page=&description=`, `/jobs/categories?source=`, `/jobs/insights?q=` (openings, top skills, top companies, salary stats), `/jobs/hn-hiring?q=` (Hacker News "Who is hiring?"). Key-less public boards, merged, de-duplicated, newest first; a failing board is listed under `errors` instead of breaking the search. Keep the `url` (link back to the board). |
 | Info | `GET /info/weather?city=|lat=&lon=&units=&days=`, `/info/geocode?q=`, `/info/holidays?country=&year=&upcoming=`, `/info/crypto?ids=&vs=`, `/info/wiki?q=`, `/info/books?q=`, `/info/hn?kind=top|new|best|ask|show|job`, `/info/ip?ip=`, `/info/dictionary?word=&related=` (definitions, phonetics, audio, examples, synonyms, antonyms, rhymes), `/info/trivia?amount=&category=&difficulty=&type=` (quiz questions with shuffled answers), `/info/song?q=|title=&artist=&limit=` (artist, album, cover, 30s preview, release date, genre, store links; Deezer + iTunes), `/info/time?city=|lat=&lon=|tz=` (local time, UTC offset, DST, sunrise/sunset) |
+| Supadata | `GET /supadata/status`, `/supadata/video?url=|id=`, `/supadata/channel?id=`, `/supadata/channel/videos?id=&limit=&type=all|video|short|live`, `/supadata/playlist?id=`, `/supadata/playlist/videos?id=`, `/supadata/search?query=&type=&upload_date=&duration=&sort_by=&limit=&next_page_token=`, `/supadata/transcript?url=&lang=&text=&mode=auto|native|generate` (YouTube, TikTok, Instagram, X, Facebook, file URLs; long media returns a job, poll `/supadata/transcript/job/{id}`), `/supadata/translate?lang=&url=|id=`, `/supadata/metadata?url=`; `POST /supadata/batch/transcripts`, `/supadata/batch/videos` (`videoIds` / `playlistId` / `channelId`), `GET /supadata/batch/{jobId}`. Needs `SUPADATA_API_KEY`. |
+| Vid Kraken | `GET /vidkraken/status`, `/vidkraken/info?url=`, `/vidkraken/link?url=&format=audio-mp3|audio|audio-aac|360|480|720|1080&start=&end=&language=&wait=true` (returns Vid Kraken's CDN link, nothing stored here), `/vidkraken/job/{id}`; `POST /vidkraken/channel` (account add-on). Needs `VIDKRAKEN_API_KEY`. |
 | Media | `GET /media/ytmp3?url=&kbps=128`, `/media/ytmp4?url=&quality=360`, `/media/download?url=&type=audio|video`, `/media/info?url=` |
 | Music | `GET /music/sources`, `/music/search?q=&source=all|archive|ccmixter|openverse|audius&limit=&commercial_only=`, `/music/trending`, `/music/info?id=`, `/music/download?id=&stream=true` |
 | More (all self-hosted) | `GET /lyrics?query=`, `/screenshot?url=`, `/image/removebg?url=`, `/cards/rank|quote|wanted|jail|ytcard`, `/fake/tweet|ytcomment`, `/fun/joke|meme|roast|insult|compliment|flirt`, `/yt/search?query=`, `/yt/play?query=&type=audio|video&quality=360&kbps=128&index=&tries=`, `/yt/video?url=|id=`, `/yt/formats?url=|id=`. Everything here is served by Ladybug itself; no third-party quota. |
@@ -88,7 +90,7 @@ YouTube downloads run on **our own yt-dlp first** (with a locally generated PO t
 `GET /v1/media/status` checks that cookies / proxy / KnightBot are set up correctly (never shows the values) and reports the live KnightBot quota usage (`minute` / `hour` / `day` vs. the configured limits) plus the current `backend_order`. `YT_COOKIES` accepts a pasted Netscape `cookies.txt` or its base64.
 #### Staying unblocked (how the YouTube path works)
 - **Auto-updating yt-dlp:** at every start the newest yt-dlp nightly (and its JS solver) is installed into `/tmp/ytdlp-latest` and used instead of the build-time copy, because YouTube breaks old versions every few weeks. `YTDLP_AUTOUPDATE=0` disables it, `YTDLP_CHANNEL=stable` uses stable releases. `/v1/media/status` shows the running version.
-- **Backend order:** self-hosted first — yt-dlp, then Cobalt (if `COBALT_API_URL`), then VDA (if `VDA_API_KEY`), then KnightBot. KnightBot is last because its shared key allows only 3000 requests/day for everyone; the service keeps its own per-minute / hourly / daily counters (`KNIGHT_MINUTE_LIMIT`, `KNIGHT_HOURLY_LIMIT`, `KNIGHT_DAILY_LIMIT`) so it never drains that quota while a self-hosted path can work. A backend that just failed is moved to the back for 5 minutes. Private/removed/unsupported videos stop immediately with a clear error.
+- **Backend order:** self-hosted first — yt-dlp, then Cobalt (if `COBALT_API_URL`), then Vid Kraken (if `VIDKRAKEN_API_KEY`), then VDA (if `VDA_API_KEY`), then KnightBot. KnightBot is last because its shared key allows only 3000 requests/day for everyone; the service keeps its own per-minute / hourly / daily counters (`KNIGHT_MINUTE_LIMIT`, `KNIGHT_HOURLY_LIMIT`, `KNIGHT_DAILY_LIMIT`) so it never drains that quota while a self-hosted path can work. A backend that just failed is moved to the back for 5 minutes. Private/removed/unsupported videos stop immediately with a clear error.
 - **Client rotation:** on a bot check, 403/429, stale page or empty format list, yt-dlp retries with other player clients (`web_embedded`, `tv_simply`, `visionos`, `web_safari`/`mweb`, `android_vr`, ...) with a growing pause, rotating proxies if `YT_PROXY` has several (comma separated).
 - **Search never depends on one service:** yt-dlp -> YouTube results page (no third-party API). `/v1/yt/search`, `/v1/yt/play`, `/v1/yt/video`, `/v1/yt/formats` and the `/api/...` routes all use it.
 - **`/v1/media/info` always answers:** if yt-dlp is blocked it returns title, channel and thumbnail from YouTube oEmbed (`"partial": true`).
@@ -105,6 +107,29 @@ YouTube downloads run on **our own yt-dlp first** (with a locally generated PO t
 
 Only download content you own or have permission to use; downloading from these sites can breach their terms.
 
+
+### Supadata and Vid Kraken (YouTube, 2026 upgrade)
+Two hosted APIs sit behind the same `/v1/yt/*`, `/v1/media/*` and KnightBot-compatible routes, so existing clients get them for free. Both are optional; with no key set nothing changes and nothing paid is called.
+
+| Service | Env var | What it does for Ladybug | Billing |
+|---|---|---|---|
+| [Supadata](https://docs.supadata.ai) | `SUPADATA_API_KEY` | Data only (no media files): video metadata, transcripts (YouTube captions, or AI speech-to-text for other platforms), search with filters, channel / playlist listings, batches. | credits per request |
+| [Vid Kraken](https://vidkraken.com/docs) | `VIDKRAKEN_API_KEY` | Hosted YouTube downloader (MP4 360-1080p, audio, 320 kbps MP3, trimming, dubbed tracks) that handles bot checks, proxies and cookies itself. | delivered bandwidth (20 MB minimum per download); failures are free |
+
+Both accept several keys, separated by commas / spaces / newlines (or `SUPADATA_KEYS_FILE` / `VIDKRAKEN_KEYS_FILE`, one per line). Keys are used round-robin; a key the service rejects is dropped until restart, and one that is rate limited or out of allowance is skipped for a while (`SUPADATA_RATE_COOLDOWN`, `SUPADATA_QUOTA_COOLDOWN`, `VIDKRAKEN_LIMIT_COOLDOWN`) and then tried again. `/v1/supadata/status` and `/v1/vidkraken/status` show pool health and the plan balances, never a key.
+
+**Where they are used automatically**
+- **Downloads** (`/v1/media/ytmp3`, `/ytmp4`, `/download`, `/v1/yt/play`, the KnightBot-compatible routes): backend order is now yt-dlp, Cobalt (if set), **Vid Kraken**, VDA, KnightBot. Vid Kraken runs only after our own yt-dlp fails or is on back-off, so a healthy host never spends bandwidth. The file lands in the normal cache, so size caps and TTL still apply.
+- **Transcripts** (`/v1/yt/transcript`): yt-dlp captions first, **Supadata** if that fails (blocked IP, no track). `auto=false` is respected. The response carries `"source": "supadata"` when it was used.
+- **Video details** (`/v1/yt/video`, `/v1/media/info`): when yt-dlp is bot-checked, Supadata supplies title, description, duration, channel, views, likes and tags instead of oEmbed's three fields (still flagged `partial`, with no format list). If both are unavailable, Vid Kraken's info endpoint fills in the duration.
+- **Search** (`/v1/yt/search`, `ytsearch`): yt-dlp, the YouTube results page, then Supadata.
+- **Channels and playlists** (`/v1/yt/channel`, `/v1/yt/playlist`): yt-dlp first; Supadata returns channel details and video IDs when it fails (flagged `partial`, no titles).
+
+`/v1/media/status` lists both under `engines`, `backend_order`, `vidkraken` and `supadata`. The web console has new YouTube tools for each.
+
+    GET /v1/supadata/search?query=lofi&sort_by=date&limit=5
+    GET /v1/supadata/transcript?url=https://www.tiktok.com/@x/video/1&mode=generate
+    GET /v1/vidkraken/link?url=https://youtu.be/dQw4w9WgXcQ&format=audio-mp3
 
 ### Free music downloads (no YouTube, no video sites)
 `/v1/music/*` searches and downloads only openly licensed music from official public APIs, no scraping:

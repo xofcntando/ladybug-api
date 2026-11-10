@@ -15,7 +15,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 
-from . import config, ytfallback
+from . import config, supadata, ytfallback
 from .knight import is_youtube
 
 router = APIRouter(prefix="/v1/yt", tags=["youtube"])
@@ -151,6 +151,13 @@ async def _info_with_fallback(vid: str) -> tuple[dict, bool]:
             return info, False
     except Exception:  # noqa: BLE001
         pass
+    if supadata.enabled():  # blocked IP: Supadata has duration, views, likes, tags and the channel
+        try:
+            sv = await asyncio.wait_for(supadata.video(vid), timeout=30)
+            if sv and sv.get("title"):
+                return supadata.to_info(sv), True
+        except Exception:  # noqa: BLE001
+            pass
     try:
         meta = await ytfallback.oembed(url)
     except Exception:  # noqa: BLE001
@@ -217,7 +224,7 @@ async def video(url: str | None = None, id: str | None = None,
     out = _video_payload(info, vid, direct)
     if partial:
         out["partial"] = True
-        out["partial_reason"] = "YouTube bot-check on this server; metadata came from oEmbed"
+        out["partial_reason"] = "YouTube bot-check on this server; metadata came from Supadata/oEmbed"
         out["formats"] = []
         out["heights"] = []
         out["best"] = {"video": None, "audio": None}

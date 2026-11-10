@@ -29,7 +29,7 @@ import yt_dlp
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
-from . import media, ytfallback
+from . import media, supadata, ytfallback
 from .cache import TTLCache
 from .http import client
 
@@ -183,9 +183,50 @@ def best_caption_url(track: list[dict]) -> tuple[str | None, str]:
     return None, ""
 
 
+def _render_captions(cues: list[dict], vid: str, chosen_lang: str | None, kind: str, used_auto: bool, format: str,
+                     source: str | None = None) -> dict:
+    common = {"success": True, "id": vid, "lang": chosen_lang, "type": kind, "auto": used_auto,
+              "cues": len(cues), "duration_seconds": round(cues[-1]["start"] + cues[-1].get("duration", 0)),
+              "formats": {"text": "/v1/yt/transcript?format=text", "srt": "/v1/yt/transcript?format=srt",
+                          "vtt": "/v1/yt/transcript?format=vtt", "json": "/v1/yt/transcript?format=json"}}
+    if source:
+        common["source"] = source
+    if format == "srt":
+        return {**common, "format": "srt", "transcript": cues_to_srt(cues)}
+    if format == "vtt":
+        return {**common, "format": "vtt", "transcript": cues_to_vtt(cues)}
+    if format == "json":
+        return {**common, "format": "json", "transcript": cues}
+    text = cues_to_text(cues)
+    return {**common, "format": "text", "transcript": text, "chars": len(text)}
+
+
+async def captions_supadata(vid: str, format: str = "text", lang: str | None = None) -> dict:
+    """Transcript from Supadata (works when YouTube bot-checks this host). Same payload as `captions`."""
+    d = await supadata.transcript(vid, lang=lang)
+    cues = supadata.chunks_to_cues((d or {}).get("content"))
+    if not cues:
+        raise HTTPException(404, "No captions available for this video")
+    return _render_captions(cues, vid, (d or {}).get("lang") or lang, "supadata", False, format, source="supadata")
+
+
 async def captions(url: str | None = None, id: str | None = None, format: str = "text",
-                    lang: str | None = None, auto: bool = True) -> dict:
-    """Caption payload for a video. Plain helper: endpoints (and other modules) pass real values."""
+                   lang: str | None = None, auto: bool = True) -> dict:
+    """Caption payload: our own yt-dlp path first, Supadata as the fallback when that fails (blocked IP, no tracks)."""
+    try:
+        return await captions_ytdlp(url=url, id=id, format=format, lang=lang, auto=auto)
+    except HTTPException as first:
+        if not supadata.enabled() or first.status_code == 400 or (not auto and first.status_code == 404):
+            raise
+        try:
+            return await captions_supadata(_vid(url, id), format, lang)
+        except HTTPException:
+            raise first
+
+
+async def captions_ytdlp(url: str | None = None, id: str | None = None, format: str = "text",
+                         lang: str | None = None, auto: bool = True) -> dict:
+    """Caption payload from yt-dlp. Plain helper: endpoints (and other modules) pass real values."""
     vid = _vid(url, id)
     i = await _info(_canon(vid))
     manual = i.get("subtitles") or {}
@@ -215,19 +256,7 @@ async def captions(url: str | None = None, id: str | None = None, format: str = 
     cues = cues_from_json3(json.loads(body)) if ext == "json3" else cues_from_vtt(body)
     if not cues:
         raise HTTPException(502, f"Could not parse the caption track ({ext})")
-
-    common = {"success": True, "id": vid, "lang": chosen_lang, "type": kind, "auto": used_auto,
-              "cues": len(cues), "duration_seconds": round(cues[-1]["start"] + cues[-1].get("duration", 0)),
-              "formats": {"text": "/v1/yt/transcript?format=text", "srt": "/v1/yt/transcript?format=srt",
-                          "vtt": "/v1/yt/transcript?format=vtt", "json": "/v1/yt/transcript?format=json"}}
-    if format == "srt":
-        return {**common, "format": "srt", "transcript": cues_to_srt(cues)}
-    if format == "vtt":
-        return {**common, "format": "vtt", "transcript": cues_to_vtt(cues)}
-    if format == "json":
-        return {**common, "format": "json", "transcript": cues}
-    text = cues_to_text(cues)
-    return {**common, "format": "text", "transcript": text, "chars": len(text)}
+    return _render_captions(cues, vid, chosen_lang, kind, used_auto, format)
 
 
 @router.get("/transcript")
@@ -535,6 +564,32 @@ async def comments(url: str | None = None, id: str | None = None,
 
 
 # ---------------------------------------------------------------- channel / playlist
+
+def _id_rows(ids: list[str]) -> list[dict]:
+    return [{"id": v, "title": None, "duration": None, "views": None, "url": f"https://www.youtube.com/watch?v={v}",
+             "thumbnail": f"https://i.ytimg.com/vi/{v}/hqdefault.jpg"} for v in ids]
+
+
+async def _channel_supadata(ref: str, max: int, tab: str) -> dict:
+    """Channel listing from Supadata: channel details plus video IDs (no per-video titles; use /v1/supadata/batch/videos)."""
+    kind = {"videos": "video", "shorts": "short", "streams": "live"}[tab]
+    ch = await supadata.call("/youtube/channel", {"id": ref})
+    ids = await supadata.call("/youtube/channel/videos", {"id": ref, "limit": max, "type": kind})
+    key = {"video": "videoIds", "short": "shortIds", "live": "liveIds"}[kind]
+    vids = ((ids or {}).get(key) or [])[:max]
+    return {"success": True, "channel": ch.get("name"), "channel_id": ch.get("id"), "followers": ch.get("subscriberCount"),
+            "url": f"https://www.youtube.com/channel/{ch.get('id')}", "count": len(vids), "videos": _id_rows(vids),
+            "source": "supadata", "partial": True, "partial_reason": "video IDs only; titles need a per-video lookup"}
+
+
+async def _playlist_supadata(target: str, max: int) -> dict:
+    pl = await supadata.call("/youtube/playlist", {"id": target})
+    ids = await supadata.call("/youtube/playlist/videos", {"id": target, "limit": max})
+    vids = ((ids or {}).get("videoIds") or [])[:max]
+    return {"success": True, "title": pl.get("title"), "playlist_id": pl.get("id"),
+            "uploader": (pl.get("channel") or {}).get("name"), "count": len(vids), "videos": _id_rows(vids),
+            "source": "supadata", "partial": True, "partial_reason": "video IDs only; titles need a per-video lookup"}
+
 @router.get("/channel")
 async def channel(handle: str | None = Query(None, description="@name of the channel"),
                   id: str | None = Query(None, description="UC... channel id"),
@@ -557,12 +612,15 @@ async def channel(handle: str | None = Query(None, description="@name of the cha
 
     try:
         info = await asyncio.wait_for(asyncio.to_thread(run), timeout=70)
-    except asyncio.TimeoutError:
-        raise HTTPException(504, "Channel listing timed out")
-    except HTTPException:
-        raise
-    except Exception as e:  # noqa: BLE001
-        raise media._err(e, url)
+    except (asyncio.TimeoutError, HTTPException, Exception) as e:  # noqa: BLE001
+        if supadata.enabled():  # blocked or slow: Supadata lists the channel from its own infrastructure
+            try:
+                return await _channel_supadata(handle or id, max, tab)
+            except HTTPException:
+                pass
+        if isinstance(e, asyncio.TimeoutError):
+            raise HTTPException(504, "Channel listing timed out")
+        raise e if isinstance(e, HTTPException) else media._err(e, url)
     entries = [e for e in (info.get("entries") or []) if e][:max]
     return {"success": True, "channel": info.get("channel") or info.get("uploader") or info.get("title"),
             "channel_id": info.get("channel_id") or info.get("id"),
@@ -592,12 +650,15 @@ async def playlist(url: str | None = None, id: str | None = None, max: int = Que
 
     try:
         info = await asyncio.wait_for(asyncio.to_thread(run), timeout=70)
-    except asyncio.TimeoutError:
-        raise HTTPException(504, "Playlist listing timed out")
-    except HTTPException:
-        raise
-    except Exception as e:  # noqa: BLE001
-        raise media._err(e, target)
+    except (asyncio.TimeoutError, HTTPException, Exception) as e:  # noqa: BLE001
+        if supadata.enabled():
+            try:
+                return await _playlist_supadata(target, max)
+            except HTTPException:
+                pass
+        if isinstance(e, asyncio.TimeoutError):
+            raise HTTPException(504, "Playlist listing timed out")
+        raise e if isinstance(e, HTTPException) else media._err(e, target)
     entries = [e for e in (info.get("entries") or []) if e][:max]
     return {"success": True, "title": info.get("title"), "playlist_id": info.get("id"),
             "uploader": info.get("uploader"), "count": len(entries),

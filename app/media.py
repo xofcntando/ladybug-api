@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from . import config, proxies, db, knight, ytfallback, ytdlp_update
+from . import config, proxies, db, knight, ytfallback, ytdlp_update, vidkraken, supadata
 from .cache import TTLCache, singleflight
 from .security import assert_public_url
 from .storage import meta_path, save_path
@@ -521,12 +521,14 @@ def _backend_order(url: str) -> list[str]:
     if not knight.is_youtube(url):
         return ["ytdlp"]
     # Self-hosted engines first, always. yt-dlp runs on our own host (with the local PO-token
-    # provider / cookies / proxy when configured), then an own Cobalt instance, then a paid
-    # VDA key. KnightBot's default key is shared by every user of that service (3000/day in
+    # provider / cookies / proxy when configured), then an own Cobalt instance, then the hosted
+    # Vid Kraken API (bandwidth billed), then a paid per-request VDA key. KnightBot's default key is shared by every user of that service (3000/day in
     # total), so it is the *last* resort and never used while a self-hosted path can work.
-    order = ["ytdlp", "cobalt", "vda", "knight"]
+    order = ["ytdlp", "cobalt", "vidkraken", "vda", "knight"]
     if not ytfallback.cobalt_enabled():
         order.remove("cobalt")
+    if not vidkraken.enabled():
+        order.remove("vidkraken")
     if not ytfallback.vda_enabled():
         order.remove("vda")
     if knight.BACKEND == "ytdlp":
@@ -566,6 +568,8 @@ async def _run(url: str, kind: str, quality: int, stream: bool, kbps: int | None
                     if not knight.enabled(url):
                         continue
                     info, path, _ = await knight.fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
+                elif backend == "vidkraken":
+                    info, path, _ = await vidkraken.fetch(url, kind, quality, config.MEDIA_MAX_MINUTES, container)
                 elif backend == "vda":
                     info, path, _ = await ytfallback.vda_fetch(url, kind, quality, config.MEDIA_MAX_MINUTES)
                 elif backend == "cobalt":
@@ -643,7 +647,24 @@ async def info(url: str):
                     meta = await ytfallback.oembed(url)
                 except Exception:  # noqa: BLE001
                     meta = None
+                if meta is None and supadata.enabled():  # oEmbed refused (e.g. not embeddable): Supadata still knows the video
+                    try:
+                        meta = supadata.to_meta(await supadata.video(supadata.video_id(url)))
+                    except Exception:  # noqa: BLE001
+                        meta = None
                 if meta is not None:
+                    if not meta.get("duration") and supadata.enabled():  # real duration, views and channel from Supadata
+                        try:
+                            sv = supadata.to_meta(await supadata.video(supadata.video_id(url)))
+                            meta = {**meta, **{k: v for k, v in sv.items() if v}}
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if not meta.get("duration") and vidkraken.enabled():  # last paid resort: Vid Kraken info
+                        try:
+                            vk = await asyncio.wait_for(vidkraken.video_info(url), timeout=45)
+                            meta["duration"] = vk.get("duration") or meta.get("duration")
+                        except Exception:  # noqa: BLE001
+                            pass
                     # oEmbed carries no duration; a title search usually fills it in even from a blocked IP
                     if not meta.get("duration"):
                         try:
@@ -655,7 +676,7 @@ async def info(url: str):
                         except Exception:  # noqa: BLE001
                             pass
                     return {**meta, "heights": [], "is_live": None, "partial": True,
-                            "partial_reason": "YouTube bot-check on this server; metadata came from oEmbed/search"}
+                            "partial_reason": "YouTube bot-check on this server; metadata came from oEmbed/Supadata/search"}
             if isinstance(e, asyncio.TimeoutError):
                 raise HTTPException(504, "Timed out fetching video info")
             raise e if isinstance(e, HTTPException) else _err(e, url)
@@ -671,6 +692,10 @@ def _engines() -> dict:
             "pot_provider": {"ready": bool(config.YT_POT_PROVIDER_URL), "self_hosted": True,
                              "note": "bgutil PO tokens; started at boot when deno is present"},
             "cobalt": {"ready": ytfallback.cobalt_enabled(), "self_hosted": True, "note": "set COBALT_API_URL"},
+            "vidkraken": {"ready": vidkraken.enabled(), "self_hosted": False, "paid": True,
+                          "note": "hosted YouTube download API (bandwidth billed); set VIDKRAKEN_API_KEY"},
+            "supadata": {"ready": supadata.enabled(), "self_hosted": False, "paid": True,
+                         "note": "metadata / transcript / search fallback, no media files; set SUPADATA_API_KEY"},
             "vda": {"ready": ytfallback.vda_enabled(), "self_hosted": False, "paid": True,
                     "note": "optional paid fallback, never required"},
             "knight": {"ready": knight.BACKEND != "ytdlp" and bool(knight.KEY), "self_hosted": False,
@@ -700,6 +725,8 @@ async def status():
             "proxies": len(_proxies()), "proxy_pool": proxies.status(), "po_token_set": bool(config.YT_PO_TOKEN), "pot_provider_set": bool(config.YT_POT_PROVIDER_URL),
             "pot_autostart": __import__("app.potserver", fromlist=["state"]).state,
             "cobalt_set": ytfallback.cobalt_enabled(),
+            "vidkraken_set": vidkraken.enabled(), "vidkraken": vidkraken.POOL.status(),
+            "supadata_set": supadata.enabled(), "supadata": supadata.POOL.status(),
             "vda_set": ytfallback.vda_enabled(),
             "vda": {"key_present": bool(ytfallback.VDA_KEYS), **ytfallback.vda_status(),
                     "key_invalid": ytfallback.vda_key_invalid,
