@@ -135,35 +135,53 @@ def has_dynamic_keys() -> bool:
     return bool(_dynamic_keys)
 
 def issue_free_test_key() -> dict:
-    raw = os.urandom(8).hex()
-    k = f'lb_test_{raw}'
-    rec = {
-        'key': k,
-        'tier': 'free_test',
-        'quota': 50,
-        'created_at': datetime.now(timezone.utc).isoformat(),
-        'unlimited': False,
-    }
-    _dynamic_keys[k] = rec
-    if hasattr(config, "API_KEYS") and isinstance(config.API_KEYS, set):
-        config.API_KEYS.add(k)
-    return rec
+    try:
+        raw = os.urandom(8).hex()
+        k = f"lb_test_{raw}"
+        rec = {
+            "key": k,
+            "tier": "free_test",
+            "quota": 50,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "unlimited": False,
+        }
+        _dynamic_keys[k] = rec
+        try:
+            from . import config
+            if hasattr(config, "API_KEYS") and isinstance(config.API_KEYS, set):
+                config.API_KEYS.add(k)
+        except Exception:
+            pass
+        return rec
+    except Exception:
+        k = f"lb_test_{os.urandom(8).hex()}"
+        _dynamic_keys[k] = {"key": k, "tier": "free_test", "quota": 50}
+        return _dynamic_keys[k]
 
-def issue_admin_key(name: str = 'Admin Master') -> dict:
-    raw = os.urandom(12).hex()
-    k = f'lb_admin_unlimited_{raw}'
-    rec = {
-        'key': k,
-        'tier': 'admin_unlimited',
-        'quota': 'unlimited',
-        'created_at': datetime.now(timezone.utc).isoformat(),
-        'unlimited': True,
-        'name': name,
-    }
-    _dynamic_keys[k] = rec
-    if hasattr(config, "API_KEYS") and isinstance(config.API_KEYS, set):
-        config.API_KEYS.add(k)
-    return rec
+def issue_admin_key(name: str = "Admin Master") -> dict:
+    try:
+        raw = os.urandom(12).hex()
+        k = f"lb_admin_unlimited_{raw}"
+        rec = {
+            "key": k,
+            "tier": "admin_unlimited",
+            "quota": "unlimited",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "unlimited": True,
+            "name": name,
+        }
+        _dynamic_keys[k] = rec
+        try:
+            from . import config
+            if hasattr(config, "API_KEYS") and isinstance(config.API_KEYS, set):
+                config.API_KEYS.add(k)
+        except Exception:
+            pass
+        return rec
+    except Exception:
+        k = f"lb_admin_unlimited_{os.urandom(12).hex()}"
+        _dynamic_keys[k] = {"key": k, "tier": "admin_unlimited", "quota": "unlimited", "name": name}
+        return _dynamic_keys[k]
 
 router = APIRouter(prefix="/v1/pricing", tags=["pricing"])
 
@@ -251,17 +269,28 @@ async def put_plans(req: PlansReq, request: Request):
     return {"saved": True, "plans": len(plans)}
 
 
-@router.post('/free-key')
-@router.get('/free-key')
+@router.post("/free-key")
+async def post_free_test_key():
+    """Generates a free test API key with 50 test requests."""
+    rec = issue_free_test_key()
+    return {
+        "ok": True,
+        "key": rec["key"],
+        "quota": 50,
+        "tier": "free_test",
+        "message": "50 free test requests granted. Pass via X-API-Key or Authorization: Bearer <key>",
+    }
+
+@router.get("/free-key")
 async def get_free_test_key():
     """Generates a free test API key with 50 test requests."""
     rec = issue_free_test_key()
     return {
-        'ok': True,
-        'key': rec['key'],
-        'quota': 50,
-        'tier': 'free_test',
-        'message': '50 free test requests granted. Pass via X-API-Key or Authorization: Bearer <key>',
+        "ok": True,
+        "key": rec["key"],
+        "quota": 50,
+        "tier": "free_test",
+        "message": "50 free test requests granted. Pass via X-API-Key or Authorization: Bearer <key>",
     }
 
 class AdminKeyReq(BaseModel):
