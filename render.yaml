@@ -35,6 +35,10 @@ services:
         sync: false
       - key: PEXELS_API_KEY     # optional, free at pexels.com/api - enables the pexels source in /v1/free/*
         sync: false
+      - key: SUPADATA_API_KEY    # supadata.ai - YouTube metadata/transcripts/search/channels, and the fallback when YouTube blocks this host. Several keys: comma separated
+        sync: false
+      - key: VIDKRAKEN_API_KEY   # vidkraken.com/dashboard - hosted YouTube download backend (tried after yt-dlp/Cobalt, before VDA). Several keys: comma separated
+        sync: false
       - key: YOUTUBE_API_KEY     # Google Cloud Console > YouTube Data API v3 - enables /v1/youtube/* (metadata)
         sync: false
       - key: YOUTUBE_API_KEYS    # optional: several keys, comma separated, rotated when one runs out of quota

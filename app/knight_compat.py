@@ -20,7 +20,7 @@ import yt_dlp
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import config, ytfallback
+from . import config, supadata, ytfallback
 from .media import _check_url, _next_proxy, _opts, _run
 from .security import require_key
 from .storage import meta_path
@@ -79,7 +79,7 @@ def _fmt(sec):
 
 
 async def search(q: str, n: int = 5) -> list[dict]:
-    """yt-dlp search -> YouTube results page (no yt-dlp, works from cloud IPs) -> KnightBot search."""
+    """yt-dlp search -> YouTube results page (no yt-dlp, works from cloud IPs) -> Supadata search."""
     try:
         res = await asyncio.wait_for(asyncio.to_thread(_search_sync, q, n), timeout=40)
         if res:
@@ -92,6 +92,11 @@ async def search(q: str, n: int = 5) -> list[dict]:
             return res
     except Exception:  # noqa: BLE001
         pass
+    if supadata.enabled():  # paid, so last: works from any IP
+        try:
+            return await asyncio.wait_for(supadata.search(q, n), timeout=25)
+        except Exception:  # noqa: BLE001
+            pass
     return []
 
 

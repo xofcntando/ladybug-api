@@ -32,7 +32,7 @@ function saveBlob(blob, name) { const u = URL.createObjectURL(blob); const a = e
 function grabHint(e) {
   const m = (e && e.message) || String(e);
   if (/429|unusual traffic|captcha|blocked this server/i.test(m))
-    return 'YouTube is blocking this server\'s IP (HTTP 429). Cookies will not fix that: set YT_PROXY (or YT_PROXY_URL) to rotate IPs, or keep VDA_API_KEY as the paid fallback.';
+    return 'YouTube is blocking this server\'s IP (HTTP 429). Cookies will not fix that: set YT_PROXY (or YT_PROXY_URL) to rotate IPs, or add VIDKRAKEN_API_KEY / VDA_API_KEY as the paid fallback.';
   if (/timed out|timeout/i.test(m)) return 'The download timed out — retry, or pick a shorter lower-quality result.';
   if (/Private video|age-restricted|members-only|not available in your country/i.test(m)) return m + ' Retrying will not help.';
   if (/not enabled|_API_KEY is not set/i.test(m)) return m;
@@ -485,8 +485,24 @@ const TOOLS = [
   { g: 'YouTube', id: 'yt-playlist', name: 'Playlist videos', desc: 'Every video in a playlist, with durations. Accepts a playlist URL or id.', fields: [T('url', 'Playlist URL or id', { ph: 'https://www.youtube.com/playlist?list=…' }), { k: 'max', label: 'How many', type: 'number', def: 50 }], submit: 'List playlist', run: get('/v1/yt/playlist', 'ytsearch') },
   { g: 'YouTube', id: 'yt-proxy', name: 'Egress IPs (proxy pool)', desc: 'Which egress IPs are usable right now and which YouTube has 429-blocked. Add YT_PROXY or YT_PROXY_URL to rotate IPs so one ban does not stop every download.',
     fields: [], submit: 'Test IPs', run: get('/v1/media/proxy-test', 'proxies') },
-  { g: 'YouTube', id: 'yt-engines', name: 'Download engines', desc: 'What is available right now: self-hosted yt-dlp, the PO-token provider, Cobalt, VDA, KnightBot and the official API. Shows the order the API will try.',
+  { g: 'YouTube', id: 'yt-engines', name: 'Download engines', desc: 'What is available right now: self-hosted yt-dlp, the PO-token provider, Cobalt, Vid Kraken, VDA, Supadata, KnightBot and the official API. Shows the order the API will try.',
     fields: [], submit: 'Check engines', run: get('/v1/media/status', 'engines') },
+
+  { g: 'YouTube', id: 'sd-video', name: 'Video details (Supadata)', desc: 'Title, description, duration, channel, views, likes, tags and transcript languages from Supadata. Works even when YouTube blocks this server. Needs SUPADATA_API_KEY.',
+    fields: [T('id', 'Video link or id', { ph: 'dQw4w9WgXcQ' })], submit: 'Get details', run: get('/v1/supadata/video') },
+  { g: 'YouTube', id: 'sd-search', name: 'Search with filters (Supadata)', desc: 'Videos, channels and playlists with date, length and sort filters. Needs SUPADATA_API_KEY.',
+    fields: [T('query', 'Search', { ph: 'lofi hip hop' }), S('type', 'Type', [['all', 'All'], ['video', 'Videos'], ['channel', 'Channels'], ['playlist', 'Playlists']]),
+      S('sort_by', 'Sort', [['relevance', 'Relevance'], ['date', 'Newest'], ['views', 'Views'], ['rating', 'Rating']]), { k: 'limit', label: 'How many', type: 'number', def: 10 }],
+    submit: 'Search', run: get('/v1/supadata/search') },
+  { g: 'YouTube', id: 'sd-transcript', name: 'Transcript, any platform (Supadata)', desc: 'Transcript of a YouTube, TikTok, Instagram, X or Facebook video. mode=generate uses AI speech-to-text when there are no captions.',
+    fields: [T('url', 'Video URL', { ph: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }), T('lang', 'Language (blank = first available)', { ph: 'en' }),
+      S('mode', 'Mode', [['auto', 'Auto'], ['native', 'Existing captions only'], ['generate', 'AI speech-to-text']])],
+    submit: 'Get transcript', run: get('/v1/supadata/transcript') },
+  { g: 'YouTube', id: 'vk-link', name: 'Download link (Vid Kraken)', desc: 'Direct CDN link for a YouTube video or its audio from the hosted Vid Kraken API; nothing is stored on this server. Needs VIDKRAKEN_API_KEY.',
+    fields: [T('url', 'YouTube link', { ph: 'https://youtu.be/dQw4w9WgXcQ' }), S('format', 'Format', [['audio-mp3', 'MP3 (320 kbps)'], ['audio', 'Best audio (M4A/WebM)'], ['audio-aac', 'AAC'], ['360', 'MP4 360p'], ['480', 'MP4 480p'], ['720', 'MP4 720p'], ['1080', 'MP4 1080p']])],
+    submit: 'Get link', run: get('/v1/vidkraken/link') },
+  { g: 'YouTube', id: 'sd-status', name: 'Supadata and Vid Kraken status', desc: 'Key pools, plan and remaining credits or bandwidth. Never shows a key.',
+    fields: [], submit: 'Check', run: async () => ({ kind: 'json', data: { supadata: await api('/v1/supadata/status'), vidkraken: await api('/v1/vidkraken/status') } }) },
 
   /* ---- music metadata (Deezer + iTunes, keyless) ---- */
   { g: 'Music info', id: 'mi-search', name: 'Music metadata search', desc: 'Tracks, artists and albums from Deezer and iTunes: cover art, release date, 30-second preview and store links. No key needed.',
