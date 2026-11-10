@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from . import config, proxies, db, knight, ytfallback, ytdlp_update, vidkraken, supadata
+from . import config, proxies, db, knight, ytfallback, ytdlp_update, vidkraken, supadata, ysa
 from .cache import TTLCache, singleflight
 from .security import assert_public_url
 from .storage import meta_path, save_path
@@ -647,12 +647,23 @@ async def info(url: str):
                     meta = await ytfallback.oembed(url)
                 except Exception:  # noqa: BLE001
                     meta = None
-                if meta is None and supadata.enabled():  # oEmbed refused (e.g. not embeddable): Supadata still knows the video
+                if meta is None and ysa.enabled():  # oEmbed refused (e.g. not embeddable): YouTube Scraper API still knows the video
+                    try:
+                        meta = ysa.to_meta(await ysa.video(ysa.video_id(url)))
+                    except Exception:  # noqa: BLE001
+                        meta = None
+                if meta is None and supadata.enabled():  # then Supadata
                     try:
                         meta = supadata.to_meta(await supadata.video(supadata.video_id(url)))
                     except Exception:  # noqa: BLE001
                         meta = None
                 if meta is not None:
+                    if not meta.get("duration") and ysa.enabled():  # real duration, views and channel from YouTube Scraper API
+                        try:
+                            yv = ysa.to_meta(await ysa.video(ysa.video_id(url)))
+                            meta = {**meta, **{k: v for k, v in yv.items() if v}}
+                        except Exception:  # noqa: BLE001
+                            pass
                     if not meta.get("duration") and supadata.enabled():  # real duration, views and channel from Supadata
                         try:
                             sv = supadata.to_meta(await supadata.video(supadata.video_id(url)))
@@ -676,7 +687,7 @@ async def info(url: str):
                         except Exception:  # noqa: BLE001
                             pass
                     return {**meta, "heights": [], "is_live": None, "partial": True,
-                            "partial_reason": "YouTube bot-check on this server; metadata came from oEmbed/Supadata/search"}
+                            "partial_reason": "YouTube bot-check on this server; metadata came from oEmbed/YouTube Scraper API/Supadata/search"}
             if isinstance(e, asyncio.TimeoutError):
                 raise HTTPException(504, "Timed out fetching video info")
             raise e if isinstance(e, HTTPException) else _err(e, url)
@@ -694,6 +705,8 @@ def _engines() -> dict:
             "cobalt": {"ready": ytfallback.cobalt_enabled(), "self_hosted": True, "note": "set COBALT_API_URL"},
             "vidkraken": {"ready": vidkraken.enabled(), "self_hosted": False, "paid": True,
                           "note": "hosted YouTube download API (bandwidth billed); set VIDKRAKEN_API_KEY"},
+            "youtubescraperapi": {"ready": ysa.enabled(), "self_hosted": False, "paid": True,
+                                  "note": "primary metadata / transcript / search / channel fallback, no media files; set YTSCRAPER_API_KEY"},
             "supadata": {"ready": supadata.enabled(), "self_hosted": False, "paid": True,
                          "note": "metadata / transcript / search fallback, no media files; set SUPADATA_API_KEY"},
             "vda": {"ready": ytfallback.vda_enabled(), "self_hosted": False, "paid": True,
@@ -726,6 +739,7 @@ async def status():
             "pot_autostart": __import__("app.potserver", fromlist=["state"]).state,
             "cobalt_set": ytfallback.cobalt_enabled(),
             "vidkraken_set": vidkraken.enabled(), "vidkraken": vidkraken.POOL.status(),
+            "ysa_set": ysa.enabled(), "ysa": ysa.POOL.status(),
             "supadata_set": supadata.enabled(), "supadata": supadata.POOL.status(),
             "vda_set": ytfallback.vda_enabled(),
             "vda": {"key_present": bool(ytfallback.VDA_KEYS), **ytfallback.vda_status(),

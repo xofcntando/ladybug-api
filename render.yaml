@@ -35,6 +35,8 @@ services:
         sync: false
       - key: PEXELS_API_KEY     # optional, free at pexels.com/api - enables the pexels source in /v1/free/*
         sync: false
+      - key: YTSCRAPER_API_KEY   # youtubescraperapi.com (app.youtubescraperapi.com/app/settings/api-keys) - primary YouTube metadata/search/transcript/channel/playlist/comments provider, no media files. Several keys: comma separated
+        sync: false
       - key: SUPADATA_API_KEY    # supadata.ai - YouTube metadata/transcripts/search/channels, and the fallback when YouTube blocks this host. Several keys: comma separated
         sync: false
       - key: VIDKRAKEN_API_KEY   # vidkraken.com/dashboard - hosted YouTube download backend (tried after yt-dlp/Cobalt, before VDA). Several keys: comma separated

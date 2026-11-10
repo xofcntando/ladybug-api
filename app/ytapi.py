@@ -27,6 +27,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from .cache import TTLCache
 from .http import client
+from . import ysa
 
 router = APIRouter(prefix="/v1/youtube", tags=["youtube-official"])
 API = "https://www.googleapis.com/youtube/v3"
@@ -65,6 +66,27 @@ def _keyless(what: str, alternative: str = "") -> HTTPException:
 
 KEYLESS_NOTE = ("No YOUTUBE_API_KEY set: this answer came from the keyless route (yt-dlp / the YouTube results "
                 "page / oEmbed). Counts can be missing and the result set is smaller than the official API's.")
+
+
+YSA_NOTE = ("No YOUTUBE_API_KEY set: this answer came from YouTube Scraper API (YTSCRAPER_API_KEY). Same fields as the "
+            "official API where YouTube exposes them; paging tokens are the provider's own.")
+
+
+def _ysa_video_item(v: dict, vid: str) -> dict:
+    """YouTube Scraper API video -> the official `videos.list` item shape."""
+    return {"id": vid, "type": "video", "title": v.get("title"), "description": (v.get("description") or "")[:1200],
+            "channel_id": v.get("channel_id"), "channel": v.get("channel_name"), "published_at": v.get("publish_date"),
+            "tags": (v.get("keywords") or [])[:20], "live": None, "duration_seconds": v.get("duration_seconds"),
+            "views": v.get("view_count"), "likes": v.get("like_count"), "comments": v.get("comment_count"),
+            "thumbnails": _keyless_thumbs(vid, v.get("thumbnail")), "url": f"https://www.youtube.com/watch?v={vid}",
+            "embed_url": f"https://www.youtube.com/embed/{vid}", "embeddable": None}
+
+
+def _ysa_rows(videos: list[dict]) -> list[dict]:
+    return [{"id": v["id"], "type": "video", "title": v.get("title"), "channel": v.get("channel"),
+             "views_text": v.get("views"), "published_text": v.get("published"),
+             "thumbnails": _keyless_thumbs(v["id"], v.get("thumbnail")),
+             "url": v.get("url") or f"https://www.youtube.com/watch?v={v['id']}"} for v in videos or [] if v.get("id")]
 
 
 def _iso(day: str | None) -> str | None:
@@ -272,6 +294,19 @@ async def search(q: str = Query(..., min_length=1, max_length=200), type: str = 
     if not _has_key():
         if type != "video":
             raise _keyless(f"{type} search", "not available keyless; use /v1/yt/search for videos")
+        if ysa.enabled():
+            try:
+                d = await ysa._cached("/youtube/search", {"search_query": q})
+                res = [{"id": r["video_id"], "type": "video", "title": r.get("title"),
+                        "channel": (r.get("channel") or {}).get("name"), "views_text": r.get("views"),
+                        "published_text": r.get("published"), "length": r.get("length"),
+                        "thumbnails": _keyless_thumbs(r["video_id"]), "url": r.get("link")}
+                       for r in (d.get("organic_results") or []) if r.get("video_id")][:max]
+                if res:
+                    return {"success": True, "total": None, "next_page_token": None, "prev_page_token": None,
+                            "source": "youtubescraperapi", "note": YSA_NOTE, "results": res}
+            except HTTPException:
+                pass
         return {"success": True, "total": None, "next_page_token": None, "prev_page_token": None,
                 "source": "keyless", "note": KEYLESS_NOTE, "results": await _keyless_search(q, max)}
     d = await _call("search", {"part": "snippet", "q": q, "type": type, "maxResults": max, "order": order,
@@ -295,7 +330,15 @@ async def search(q: str = Query(..., min_length=1, max_length=200), type: str = 
 @router.get("/video")
 async def video(id: str | None = None, url: str | None = None):
     if not _has_key():
-        v = await _keyless_video(_vid(id, url))
+        vid = _vid(id, url)
+        if ysa.enabled():
+            try:
+                v = await ysa.video(vid)
+                if v and v.get("title"):
+                    return {"success": True, "source": "youtubescraperapi", "note": YSA_NOTE, **_ysa_video_item(v, vid)}
+            except HTTPException:
+                pass
+        v = await _keyless_video(vid)
         return {"success": True, "source": "keyless", "note": KEYLESS_NOTE, **v}
     v = await _videos([_vid(id, url)])
     if not v:
@@ -321,6 +364,13 @@ async def _channel(id: str | None, handle: str | None) -> dict:
 
 @router.get("/channel")
 async def channel(id: str | None = None, handle: str | None = None):
+    if not _has_key() and ysa.enabled() and (id or handle):
+        d = await ysa.call("/youtube/channel", {"channel": id or handle})
+        return {"success": True, "source": "youtubescraperapi", "note": YSA_NOTE, "id": d.get("channel_id"),
+                "title": d.get("channel_name"), "description": d.get("description"), "handle": d.get("handle"),
+                "country": None, "created_at": None, "subscribers": d.get("subscriber_count"), "views": None,
+                "videos": d.get("video_count"), "thumbnails": {"high": d.get("avatar")}, "uploads_playlist": None,
+                "url": d.get("url") or f"https://www.youtube.com/channel/{d.get('channel_id')}"}
     c = await _channel(id, handle)
     sn, st = c.get("snippet", {}), c.get("statistics", {})
     n = lambda x: int(x) if x is not None else None
@@ -344,6 +394,11 @@ async def channel_videos(id: str | None = None, handle: str | None = None, max: 
                          page_token: str | None = None):
     """Latest uploads (1-2 units, far cheaper than search)."""
     if not _has_key():
+        if ysa.enabled() and (id or handle or page_token):
+            d = await ysa.call("/youtube/channel", {"channel": None if page_token else (id or handle),
+                                                     "page_token": page_token})
+            return {"success": True, "source": "youtubescraperapi", "note": YSA_NOTE, "channel_id": d.get("channel_id"),
+                    "next_page_token": d.get("next_page_token"), "videos": _ysa_rows(d.get("videos"))[:max]}
         raise _keyless("A channel's uploads", "use /v1/yt/search?query=<channel name>")
     c = await _channel(id, handle)
     return await _playlist_videos(c["contentDetails"]["relatedPlaylists"]["uploads"], max, page_token)
@@ -351,10 +406,14 @@ async def channel_videos(id: str | None = None, handle: str | None = None, max: 
 
 @router.get("/playlist")
 async def playlist(id: str, max: int = Query(50, ge=1, le=50), page_token: str | None = None):
-    if not _has_key():
-        raise _keyless("Playlist listing", "use /v1/yt/play?url=<video in the playlist>")
     if not re.fullmatch(r"[A-Za-z0-9_-]{10,60}", id):
         raise HTTPException(400, "Bad playlist id")
+    if not _has_key():
+        if ysa.enabled():
+            d = await ysa._cached("/youtube/playlist", {"playlist_id": id})
+            return {"success": True, "source": "youtubescraperapi", "note": YSA_NOTE, "playlist_id": id,
+                    "total": d.get("video_count"), "next_page_token": None, "videos": _ysa_rows(d.get("videos"))[:max]}
+        raise _keyless("Playlist listing", "use /v1/yt/play?url=<video in the playlist>")
     return await _playlist_videos(id, max, page_token)
 
 
@@ -362,6 +421,17 @@ async def playlist(id: str, max: int = Query(50, ge=1, le=50), page_token: str |
 async def comments(id: str | None = None, url: str | None = None, max: int = Query(20, ge=1, le=100),
                    order: str = Query("relevance", pattern="^(relevance|time)$"), page_token: str | None = None):
     if not _has_key():
+        if ysa.enabled():
+            if page_token:
+                d = await ysa.call("/youtube/comments", {"page_token": page_token})
+            else:
+                d = await ysa.call("/youtube/comments", {"video_id": _vid(id, url),
+                                                          "sort": "newest" if order == "time" else "top"})
+            return {"success": True, "source": "youtubescraperapi", "note": YSA_NOTE,
+                    "next_page_token": d.get("next_page_token"),
+                    "comments": [{"id": None, "author": c.get("author"), "text": c.get("text"), "likes": c.get("likes"),
+                                  "published_at": None, "published_text": c.get("published_time"),
+                                  "replies": c.get("reply_count")} for c in (d.get("comments") or [])][:max]}
         raise _keyless("Comments")
     d = await _call("commentThreads", {"part": "snippet", "videoId": _vid(id, url), "maxResults": max, "order": order,
                                        "pageToken": page_token, "textFormat": "plainText"})

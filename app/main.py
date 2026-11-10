@@ -36,6 +36,7 @@ from .youtube import router as youtube_router
 from .ytplus import router as ytplus_router
 from .dlplus import router as dlplus_router
 from .supadata import router as supadata_router
+from .ysa import router as ysa_router
 from .vidkraken import router as vidkraken_router
 from .knight_compat import router as compat_router, public as compat_public
 from .cards import router as cards_router
@@ -135,6 +136,7 @@ app.include_router(ytapi_router, dependencies=auth)  # official YouTube Data API
 app.include_router(own_router, dependencies=auth)  # self-hosted: lyrics, cards, fun, screenshot, removebg, tweet
 app.include_router(youtube_router, dependencies=auth)  # self-hosted YouTube: search / play / video / formats
 app.include_router(ytplus_router, dependencies=auth)  # transcripts, chapters, thumbnails, suggestions, related, comments, channel, playlist
+app.include_router(ysa_router, dependencies=auth)  # YouTube Scraper API: metadata, search, channels, playlists, comments, transcripts
 app.include_router(supadata_router, dependencies=auth)  # Supadata: YouTube metadata, transcripts, search, channels, batches
 app.include_router(vidkraken_router, dependencies=auth)  # Vid Kraken: hosted YouTube download links
 app.include_router(dlplus_router, dependencies=auth)  # image fetch/batch/favicon/search + yt download/batch/playlist zip

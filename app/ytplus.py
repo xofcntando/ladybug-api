@@ -29,7 +29,7 @@ import yt_dlp
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
-from . import media, supadata, ytfallback
+from . import media, supadata, ytfallback, ysa
 from .cache import TTLCache
 from .http import client
 
@@ -210,13 +210,32 @@ async def captions_supadata(vid: str, format: str = "text", lang: str | None = N
     return _render_captions(cues, vid, (d or {}).get("lang") or lang, "supadata", False, format, source="supadata")
 
 
+async def captions_ysa(vid: str, format: str = "text", lang: str | None = None) -> dict:
+    """Transcript from YouTube Scraper API (works when YouTube bot-checks this host). Same payload as `captions`."""
+    d = await ysa.transcript(vid)
+    cues = ysa.segments_to_cues((d or {}).get("segments"))
+    if not cues and (d or {}).get("text"):
+        cues = [{"start": 0.0, "duration": 0.0, "text": d["text"]}]
+    if not cues:
+        raise HTTPException(404, "No captions available for this video")
+    return _render_captions(cues, vid, (d or {}).get("language") or lang, "youtubescraperapi",
+                            bool((d or {}).get("is_generated")), format, source="youtubescraperapi")
+
+
 async def captions(url: str | None = None, id: str | None = None, format: str = "text",
                    lang: str | None = None, auto: bool = True) -> dict:
-    """Caption payload: our own yt-dlp path first, Supadata as the fallback when that fails (blocked IP, no tracks)."""
+    """Caption payload: our own yt-dlp path first, then YouTube Scraper API, then Supadata (blocked IP, no tracks)."""
     try:
         return await captions_ytdlp(url=url, id=id, format=format, lang=lang, auto=auto)
     except HTTPException as first:
-        if not supadata.enabled() or first.status_code == 400 or (not auto and first.status_code == 404):
+        if first.status_code == 400 or (not auto and first.status_code == 404):
+            raise
+        if ysa.enabled():
+            try:
+                return await captions_ysa(_vid(url, id), format, lang)
+            except HTTPException:
+                pass
+        if not supadata.enabled():
             raise
         try:
             return await captions_supadata(_vid(url, id), format, lang)
@@ -613,7 +632,12 @@ async def channel(handle: str | None = Query(None, description="@name of the cha
     try:
         info = await asyncio.wait_for(asyncio.to_thread(run), timeout=70)
     except (asyncio.TimeoutError, HTTPException, Exception) as e:  # noqa: BLE001
-        if supadata.enabled():  # blocked or slow: Supadata lists the channel from its own infrastructure
+        if ysa.enabled():  # blocked or slow: YouTube Scraper API lists the channel with real titles
+            try:
+                return await ysa.channel_listing(handle or id, max, tab)
+            except HTTPException:
+                pass
+        if supadata.enabled():  # then Supadata (video IDs only)
             try:
                 return await _channel_supadata(handle or id, max, tab)
             except HTTPException:
@@ -651,6 +675,12 @@ async def playlist(url: str | None = None, id: str | None = None, max: int = Que
     try:
         info = await asyncio.wait_for(asyncio.to_thread(run), timeout=70)
     except (asyncio.TimeoutError, HTTPException, Exception) as e:  # noqa: BLE001
+        pid = ysa.playlist_id(target)
+        if ysa.enabled() and pid:
+            try:
+                return await ysa.playlist_listing(pid, max)
+            except HTTPException:
+                pass
         if supadata.enabled():
             try:
                 return await _playlist_supadata(target, max)

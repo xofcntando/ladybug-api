@@ -15,7 +15,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 
-from . import config, supadata, ytfallback
+from . import config, supadata, ytfallback, ysa
 from .knight import is_youtube
 
 router = APIRouter(prefix="/v1/yt", tags=["youtube"])
@@ -151,7 +151,14 @@ async def _info_with_fallback(vid: str) -> tuple[dict, bool]:
             return info, False
     except Exception:  # noqa: BLE001
         pass
-    if supadata.enabled():  # blocked IP: Supadata has duration, views, likes, tags and the channel
+    if ysa.enabled():  # blocked IP: YouTube Scraper API has duration, views, likes, tags and the channel
+        try:
+            yv = await asyncio.wait_for(ysa.video(vid), timeout=45)
+            if yv and yv.get("title"):
+                return ysa.to_info(yv), True
+        except Exception:  # noqa: BLE001
+            pass
+    if supadata.enabled():  # then Supadata: duration, views, likes, tags and the channel
         try:
             sv = await asyncio.wait_for(supadata.video(vid), timeout=30)
             if sv and sv.get("title"):
