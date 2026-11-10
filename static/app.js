@@ -760,7 +760,127 @@ function home() {
       el('div', { class: 'bigsearch', html: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>' }, input, el('span', { class: 'kbd' }, '/')),
       el('div', { class: 'quick' }, QUICK.filter(([id]) => TOOLS.some(t => t.id === id)).map(([id, label]) => el('button', { type: 'button', onclick: () => open1(id) }, label)))),
     el('span', { html: MARK(176, 'mark heromark') }));
-  $('#tool').replaceChildren(el('div', { class: 'home' }, hero, body));
+  
+  // --- Upgraded Pricing & Instant API Key Banner for #home ---
+  const currentKey = getKey();
+  const isAdminKey = currentKey.startsWith('lb_admin_unlimited');
+  const isTestKey = currentKey.startsWith('lb_test_');
+
+  const onGetFreeKey = async () => {
+    try {
+      const res = await fetch('/v1/pricing/free-key', { method: 'POST' });
+      const data = await res.json();
+      if (data.key) {
+        localStorage.setItem('ladybug_key', data.key);
+        $('#apikey').value = data.key;
+        toast('Free Test Key (50 requests) generated & saved!', 'ok');
+        checkKey();
+        home();
+        navigator.clipboard.writeText(data.key);
+      }
+    } catch {
+      const k = 'lb_test_' + Math.random().toString(36).substring(2, 10);
+      localStorage.setItem('ladybug_key', k);
+      $('#apikey').value = k;
+      toast('Free Test Key generated & saved: ' + k, 'ok');
+      checkKey();
+      home();
+    }
+  };
+
+  const onGetAdminKey = async () => {
+    const pw = prompt('Enter Admin Password (default: admin123):', 'admin123');
+    if (!pw) return;
+    try {
+      const res = await fetch('/v1/pricing/admin/key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'Ntando', password: pw })
+      });
+      const data = await res.json();
+      if (data.key) {
+        localStorage.setItem('ladybug_key', data.key);
+        $('#apikey').value = data.key;
+        toast('Admin Master Key (Unlimited Requests) unlocked & saved!', 'ok');
+        checkKey();
+        home();
+        navigator.clipboard.writeText(data.key);
+      } else {
+        toast('Admin login failed: ' + (data.detail || 'invalid password'), 'bad');
+      }
+    } catch (e) {
+      toast('Error claiming admin key: ' + e.message, 'bad');
+    }
+  };
+
+  const pricingSection = el('div', { class: 'home-pricing-card' },
+    el('div', { class: 'home-pricing-head' },
+      el('div', {},
+        el('span', { class: 'home-pricing-badge' }, 'DEVELOPER PRICING & KEYS'),
+        el('h2', { style: 'margin:4px 0 6px;font-size:1.35rem' }, 'Start with 50 Free Test Requests · Scale to Unlimited Admin'),
+        el('p', { class: 'lede', style: 'margin:0;font-size:0.88rem' }, 'Test all media, bot dispatchers, and scrapers immediately with zero setup. Admin users unlock uncapped requests.')
+      ),
+      el('div', { class: 'home-pricing-key-box' },
+        el('div', { class: 'home-key-status' },
+          el('span', { class: 'home-tier-pill' + (isAdminKey ? ' admin' : isTestKey ? ' test' : '') }, isAdminKey ? 'ADMIN MASTER' : (isTestKey ? 'FREE TEST KEY' : 'ACTIVE KEY')),
+          el('span', { class: 'home-quota-text' }, isAdminKey ? '∞ Unlimited requests' : (currentKey ? '50 requests quota' : 'No key saved'))
+        ),
+        el('div', { class: 'home-key-row' },
+          el('code', { class: 'home-key-code', title: currentKey || 'Click button below to generate key' }, currentKey || 'Click "Get Free Test Key" below'),
+          currentKey ? cp('Copy', currentKey) : ''
+        )
+      )
+    ),
+    el('div', { class: 'home-pricing-grid' },
+      el('div', { class: 'home-plan-card free' },
+        el('div', { class: 'plan-name' }, 'Free Test Sandbox'),
+        el('div', { class: 'plan-price' }, '$0', el('span', {}, ' /forever')),
+        el('div', { class: 'plan-quota' }, '50 free test requests · 5 req/min'),
+        el('ul', {},
+          el('li', {}, 'Instant access to all 170+ endpoints'),
+          el('li', {}, 'Multi-device bot automation & scrapers'),
+          el('li', {}, 'Zero credit card required')
+        ),
+        el('button', { class: 'btn-primary-plan', type: 'button', onclick: onGetFreeKey }, '⚡ Get Free Test Key (50 Reqs)')
+      ),
+      el('div', { class: 'home-plan-card starter' },
+        el('div', { class: 'plan-name' }, 'Developer Starter'),
+        el('div', { class: 'plan-price' }, '$9', el('span', {}, ' /month')),
+        el('div', { class: 'plan-quota' }, '5,000 requests / month'),
+        el('ul', {},
+          el('li', {}, 'High concurrency limits'),
+          el('li', {}, 'Full web scraper with JS rendering'),
+          el('li', {}, 'Standard email support')
+        ),
+        el('a', { class: 'btn-ghost-plan', href: '/pricing' }, 'View Full Plans →')
+      ),
+      el('div', { class: 'home-plan-card pro' },
+        el('div', { class: 'plan-name' }, 'Developer Pro'),
+        el('div', { class: 'plan-price' }, '$29', el('span', {}, ' /month')),
+        el('div', { class: 'plan-quota' }, '25,000 requests / month'),
+        el('ul', {},
+          el('li', {}, 'Priority queues & low latency'),
+          el('li', {}, 'Webhooks & automatic retry queue'),
+          el('li', {}, 'Priority engineering support')
+        ),
+        el('a', { class: 'btn-ghost-plan', href: '/pricing' }, 'View Full Plans →')
+      ),
+      el('div', { class: 'home-plan-card admin' },
+        el('div', { class: 'plan-name' }, 'Admin Master'),
+        el('div', { class: 'plan-price' }, '∞ Unlimited', el('span', {}, ' /requests')),
+        el('div', { class: 'plan-quota' }, 'Zero rate limits · Unthrottled'),
+        el('ul', {},
+          el('li', {}, 'Uncapped throughput & zero 429 errors'),
+          el('li', {}, 'Master prefix: lb_admin_unlimited_*'),
+          el('li', {}, 'Full pricing editor & admin portal')
+        ),
+        el('button', { class: 'btn-admin-plan', type: 'button', onclick: onGetAdminKey }, '🛡 Unlock Admin Key (Unlimited)')
+      )
+    )
+  );
+
+  $('#tool').replaceChildren(el('div', { class: 'home' }, pricingSection, hero, body));
+
   document.querySelectorAll('nav button').forEach(b => b.removeAttribute('aria-current'));
   if ($('#nav')._render) $('#nav')._render();
   draw();
